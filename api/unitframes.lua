@@ -1648,111 +1648,118 @@ function pfUI.uf:RefreshUnit(unit, component)
       unit.dispellable = {}
     end
 
+    local canCleanse = UnitCanAssist("player", unitstr)
+    local isCharmedFriend = not canCleanse and UnitIsCharmed(unitstr)
+    
     if table.getn(unit.dispellable) > 0 and not UnitCanAttack("player", unitstr) then
-      unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
+      if canCleanse then
+          unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
 
-      -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
-      local disptype = unit.config.debuff_indicator
-      local indicator = unit.hp.bar.debuffindicators
-      local indipos = unit.config.debuff_ind_pos
-      local count = 0
-      local size
-
-      if disptype == "4" or disptype == "3" then
-        size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
-        if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
-          indicator:ClearAllPoints()
-          indicator:SetPoint(indipos, 0, 0)
-          indicator:SetHeight(size)
-          indicator:SetWidth(size)
-          indicator.size = size
-          indicator.disp = disptype
-          indicator.ipos  = indipos
-        end
-      elseif disptype == "2" or disptype == "1" then
-        size = "FULL"
-        if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
-          indicator:ClearAllPoints()
-          indicator:SetAllPoints(unit.hp.bar)
-          indicator.size = size
-          indicator.disp = disptype
-          indicator.ipos = indipos
-        end
-      end
-
-      for _, debuff in pairs(unit.dispellable) do
-        indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
-        indicator[debuff]:SetParent(indicator)
-        indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
-        indicator[debuff].tex:SetAllPoints(indicator[debuff])
-
-        if indicator.size ~= indicator[debuff].size or disptype ~= indicator[debuff].disp then
-          if disptype == "4" then
-            indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
-            indicator[debuff].tex:SetVertexColor(unpack(pfDebuffColors[debuff]))
-            indicator[debuff].tex:Show()
-            indicator[debuff]:ClearAllPoints()
-            indicator[debuff]:SetHeight(size)
-            indicator[debuff]:SetWidth(size)
-            indicator[debuff]:SetBackdrop(nil)
-          elseif disptype == "3" then
-            indicator[debuff].tex:SetTexture(unpack(pfDebuffColors[debuff]))
-            indicator[debuff].tex:SetVertexColor(1,1,1,1)
-            indicator[debuff].tex:Show()
-            indicator[debuff]:ClearAllPoints()
-            indicator[debuff]:SetHeight(size)
-            indicator[debuff]:SetWidth(size)
-            indicator[debuff]:SetBackdrop(nil)
-          elseif disptype == "2" then
-            indicator[debuff].tex:Hide()
-            indicator[debuff]:SetAllPoints(unit.hp.bar)
-            indicator[debuff]:SetBackdrop(glow)
-            indicator[debuff]:SetBackdropBorderColor(unpack(pfDebuffColors[debuff]))
-          elseif disptype == "1" then
-            indicator[debuff].tex:SetTexture(unpack(pfDebuffColors[debuff]))
-            indicator[debuff].tex:SetVertexColor(1,1,1,1)
-            indicator[debuff].tex:Show()
-            indicator[debuff]:SetAllPoints(unit.hp.bar)
-            indicator[debuff]:SetBackdrop(nil)
-          end
-
-          indicator[debuff].size = indicator.size
-          indicator[debuff].disp = indicator.disp
-        end
-
-        indicator[debuff].visible = nil
-
-        for i=1,16 do
-          local _, _, dtype = UnitDebuff(unitstr, i)
-          if dtype == debuff then
-            indicator[debuff].visible = true
-          end
-        end
-
-        if indicator[debuff].visible then
-          indicator[debuff]:Show()
-          indicator:Show()
-          indicator:SetAlpha(0)
-          if disptype == "4" or disptype == "3" then
-            indicator:SetAlpha(1)
-          elseif disptype == "2" then
-            indicator:SetAlpha(.4)
-          elseif disptype == "1" then
-            indicator:SetAlpha(.2)
-          end
+          -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
+          local disptype = unit.config.debuff_indicator
+          local indicator = unit.hp.bar.debuffindicators
+          local indipos = unit.config.debuff_ind_pos
+          local count = 0
+          local size
 
           if disptype == "4" or disptype == "3" then
-            indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", count*(size+1), 0)
-            count = count + 1
+            size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
+            if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
+              indicator:ClearAllPoints()
+              indicator:SetPoint(indipos, 0, 0)
+              indicator:SetHeight(size)
+              indicator:SetWidth(size)
+              indicator.size = size
+              indicator.disp = disptype
+              indicator.ipos  = indipos
+            end
+          elseif disptype == "2" or disptype == "1" then
+            size = "FULL"
+            if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
+              indicator:ClearAllPoints()
+              indicator:SetAllPoints(unit.hp.bar)
+              indicator.size = size
+              indicator.disp = disptype
+              indicator.ipos = indipos
+            end
           end
-        else
-          indicator[debuff]:Hide()
-        end
-      end
 
-      if disptype == "4" or disptype == "3" then
-        indicator:SetWidth(count*(size+1))
-      end
+          for _, debuff in pairs(unit.dispellable) do
+            indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
+            indicator[debuff]:SetParent(indicator)
+            indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
+            indicator[debuff].tex:SetAllPoints(indicator[debuff])
+
+            if indicator.size ~= indicator[debuff].size or disptype ~= indicator[debuff].disp then
+              if disptype == "4" then
+                indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
+                indicator[debuff].tex:SetVertexColor(unpack(pfDebuffColors[debuff]))
+                indicator[debuff].tex:Show()
+                indicator[debuff]:ClearAllPoints()
+                indicator[debuff]:SetHeight(size)
+                indicator[debuff]:SetWidth(size)
+                indicator[debuff]:SetBackdrop(nil)
+              elseif disptype == "3" then
+                indicator[debuff].tex:SetTexture(unpack(pfDebuffColors[debuff]))
+                indicator[debuff].tex:SetVertexColor(1,1,1,1)
+                indicator[debuff].tex:Show()
+                indicator[debuff]:ClearAllPoints()
+                indicator[debuff]:SetHeight(size)
+                indicator[debuff]:SetWidth(size)
+                indicator[debuff]:SetBackdrop(nil)
+              elseif disptype == "2" then
+                indicator[debuff].tex:Hide()
+                indicator[debuff]:SetAllPoints(unit.hp.bar)
+                indicator[debuff]:SetBackdrop(glow)
+                indicator[debuff]:SetBackdropBorderColor(unpack(pfDebuffColors[debuff]))
+              elseif disptype == "1" then
+                indicator[debuff].tex:SetTexture(unpack(pfDebuffColors[debuff]))
+                indicator[debuff].tex:SetVertexColor(1,1,1,1)
+                indicator[debuff].tex:Show()
+                indicator[debuff]:SetAllPoints(unit.hp.bar)
+                indicator[debuff]:SetBackdrop(nil)
+              end
+
+              indicator[debuff].size = indicator.size
+              indicator[debuff].disp = indicator.disp
+            end
+
+            indicator[debuff].visible = nil
+
+            for i=1,16 do
+              local _, _, dtype = UnitDebuff(unitstr, i)
+              if dtype == debuff then
+                indicator[debuff].visible = true
+              end
+            end
+
+            if indicator[debuff].visible then
+              indicator[debuff]:Show()
+              indicator:Show()
+              indicator:SetAlpha(0)
+              if disptype == "4" or disptype == "3" then
+                indicator:SetAlpha(1)
+              elseif disptype == "2" then
+                indicator:SetAlpha(.4)
+              elseif disptype == "1" then
+                indicator:SetAlpha(.2)
+              end
+
+              if disptype == "4" or disptype == "3" then
+                indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", count*(size+1), 0)
+                count = count + 1
+              end
+            else
+              indicator[debuff]:Hide()
+            end
+          end
+
+          if disptype == "4" or disptype == "3" then
+            indicator:SetWidth(count*(size+1))
+          end
+        elseif unit.hp.bar.debuffindicators then
+          unit.hp.bar.debuffindicators:Hide()
+        end
     elseif unit.hp.bar.debuffindicators then
       unit.hp.bar.debuffindicators:Hide()
     end
