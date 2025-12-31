@@ -1648,7 +1648,7 @@ function pfUI.uf:RefreshUnit(unit, component)
       unit.dispellable = {}
     end
 
-    if table.getn(unit.dispellable) > 0 then
+    if table.getn(unit.dispellable) > 0 and not UnitCanAttack("player", unitstr) then
       unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
 
       -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
