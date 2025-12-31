@@ -75,6 +75,18 @@ if pfUI.expansion == "tbc" then
   return
 end
 
+if IsSpellInRange then
+  spell = 635 -- Holy Light. TODO other healers
+  function librange:UnitInSpellRange(unit)
+    if not spell then return nil end
+    return IsSpellInRange(spell, unit) == 1 and true or nil
+  end
+
+  -- add librange to pfUI API
+  pfUI.api.librange = librange
+  return
+end
+
 -- units that should be scanned
 local units = {}
 table.insert(units, "pet")
