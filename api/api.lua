@@ -70,6 +70,14 @@ function pfUI.api.UnitInRange(unit)
   end
 end
 
+function pfUI.api.UnitIn20ydRange(unit)
+  if not UnitExists(unit) or not UnitIsVisible(unit) then
+    return nil
+  else
+    return librange:UnitIn20ydSpellRange(unit)
+  end
+end
+
 -- [ RunOOC ]
 -- Runs a function once, as soon as the combat lockdown fades.
 -- func         [function]      The function that shall run ooc.

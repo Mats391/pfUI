@@ -1373,44 +1373,67 @@ function pfUI.uf:RefreshUnitState(unit)
     elseif unit.config.faderange == "1" then
         if not pfUI.api.UnitInRange(unitstr) then
             alpha = unit.alpha_outrange
-            if unit.hp.bar.losIndicator then
-                unit.hp.bar.losIndicator:Hide()
+            if unit.hp.bar.healIndicator then
+                unit.hp.bar.healIndicator:Hide()
             end
         elseif hasUnitxp then
-            -- LOS indicator
-            unit.hp.bar.losIndicator = unit.hp.bar.losIndicator or CreateFrame("Frame", nil, unit.hp.bar)
-            local losIndicator = unit.hp.bar.losIndicator
+            -- Heal indicator LOS
+            unit.hp.bar.healIndicator = unit.hp.bar.healIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+            local healIndicator = unit.hp.bar.healIndicator
+            
+            -- TODO Size Config?
+            local size = unit.hp.bar:GetHeight() * 0.9
+            
+            healIndicator.tex = healIndicator.tex or healIndicator:CreateTexture(nil)
+            healIndicator.tex:SetAllPoints(healIndicator)
+            
+            -- 0: No Los, 1: 20yd, 2: 10yd AOE
+            healIndicator.type = nil
+            local typeNoLos = 0
+            local type20yd = 1
+            local type10ydAoe = 2
             
             local hasLos = UnitXP("inSight", "player", unitstr)
             if not hasLos then
-                
-                -- TODO Size Config?
-                local size = unit.hp.bar:GetHeight() * 0.9
-                
-                losIndicator.tex = losIndicator.tex or losIndicator:CreateTexture(nil)
-                losIndicator.tex:SetAllPoints(losIndicator)
-                
-                if size ~= losIndicator.size then
+                if size ~= healIndicator.size or healIndicator.type ~= typeNoLos then
                     -- TODO Location Config?
-                    losIndicator.tex:SetTexture(pfUI.media["img:NoLos"])
-                    losIndicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
-                    losIndicator.tex:Show()
-                    losIndicator:ClearAllPoints()
-                    losIndicator:SetPoint("LEFT", 0, 0)
-                    losIndicator:SetHeight(size)
-                    losIndicator:SetWidth(size)
-                    losIndicator:SetBackdrop(nil)
+                    healIndicator.tex:SetTexture(pfUI.media["img:NoLos"])
+                    healIndicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
+                    healIndicator.tex:Show()
+                    healIndicator:ClearAllPoints()
+                    healIndicator:SetPoint("LEFT", 0, 0)
+                    healIndicator:SetHeight(size)
+                    healIndicator:SetWidth(size)
+                    healIndicator:SetBackdrop(nil)
                   
-                    losIndicator.size = size
+                    healIndicator.size = size
+                    healIndicator.type = typeNoLos
                 end
-                losIndicator:Show()
-                losIndicator:SetAlpha(1)
+                healIndicator:Show()
+                healIndicator:SetAlpha(1)
+            elseif pfUI.api.UnitIn20ydRange(unitstr) then -- TODO only if damaged
+                if size ~= healIndicator.size or healIndicator.type ~= type20yd then
+                    -- TODO Location Config?
+                    healIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
+                    healIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+                    healIndicator.tex:Show()
+                    healIndicator:ClearAllPoints()
+                    healIndicator:SetPoint("LEFT", 0, 0)
+                    healIndicator:SetHeight(size)
+                    healIndicator:SetWidth(size)
+                    healIndicator:SetBackdrop(nil)
+                  
+                    healIndicator.size = size
+                    healIndicator.type = type20yd
+                end
+                healIndicator:Show()
+                healIndicator:SetAlpha(1)
             else
-                losIndicator:Hide()
+                healIndicator:Hide()
             end
         end
-    elseif unit.hp.bar.losIndicator then
-        unit.hp.bar.losIndicator:Hide()
+    elseif unit.hp.bar.healIndicator then
+        unit.hp.bar.healIndicator:Hide()
     end
   end
 

@@ -76,10 +76,16 @@ if pfUI.expansion == "tbc" then
 end
 
 if IsSpellInRange then
-  spell = 635 -- Holy Light. TODO other healers
+  local spell40yd = 635 -- Holy Light. TODO other healers
+  local spell20yd = 20473 -- Holy Shock. TODO other healers
   function librange:UnitInSpellRange(unit)
-    if not spell then return nil end
-    return IsSpellInRange(spell, unit) == 1 and true or nil
+    if not spell40yd then return nil end
+    return IsSpellInRange(spell40yd, unit) == 1 and true or nil
+  end
+  
+  function librange:UnitIn20ydSpellRange(unit)
+    if not spell20yd then return nil end
+    return IsSpellInRange(spell20yd, unit) == 1 and true or nil
   end
 
   -- add librange to pfUI API
