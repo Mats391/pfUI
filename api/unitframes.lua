@@ -1791,12 +1791,12 @@ function pfUI.uf:RefreshUnit(unit, component)
             indicator[debuff].size = indicator.size
             indicator[debuff].disp = indicator.disp
           end
-          indicator:SetWidth(size)
+          indicator:SetWidth(size+1)
           
           indicator[debuff]:Show()
           indicator:Show()
           indicator:SetAlpha(1)
-          indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", size+1, 0)
+          indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", 0, 0)
         elseif unit.hp.bar.debuffindicators then
           unit.hp.bar.debuffindicators:Hide()
         end
