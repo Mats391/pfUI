@@ -1756,6 +1756,9 @@ function pfUI.uf:RefreshUnit(unit, component)
           local indipos = unit.config.debuff_ind_pos
           local count = 0
           local size
+          if indicator["Mindcontrol"] and indicator["Mindcontrol"].visible then
+            indicator["Mindcontrol"]:Hide()
+          end
 
           if disptype == "4" or disptype == "3" then
             size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
@@ -1826,10 +1829,6 @@ function pfUI.uf:RefreshUnit(unit, component)
               if dtype == debuff then
                 indicator[debuff].visible = true
               end
-            end
-            
-            if indicator["Mindcontrol"] then
-              indicator["Mindcontrol"].visible = nil
             end
 
             if indicator[debuff].visible then
