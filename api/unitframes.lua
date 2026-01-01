@@ -1404,15 +1404,24 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         end
         healIndicator:Show()
         healIndicator:SetAlpha(1)
-    elseif UnitCanAssist("player", unitstr) and pfUI.api.UnitIn20ydRange(unitstr) then -- TODO only if damaged
-        if healIndicator.type ~= type20yd then
-            healIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
-            healIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
-            healIndicator.tex:Show()
-            healIndicator.type = type20yd
+    elseif UnitCanAssist("player", unitstr) then
+        local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
+        -- TODO Config
+        -- TODO optimize if missing is 0?
+        local minHealthMissing20yd = 1000
+        
+        if healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
+            if healIndicator.type ~= type20yd then
+                healIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
+                healIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+                healIndicator.tex:Show()
+                healIndicator.type = type20yd
+            end
+            healIndicator:Show()
+            healIndicator:SetAlpha(1)
+        else
+            healIndicator:Hide()
         end
-        healIndicator:Show()
-        healIndicator:SetAlpha(1)
     else
         healIndicator:Hide()
     end
