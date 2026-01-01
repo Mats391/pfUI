@@ -1377,6 +1377,7 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     local typeNoLos = 0
     local type20yd = 1
     local type10ydAoe = 2
+    -- TODO Location Config?
     local healPos = "RIGHT"
     
     if healPos ~= healIndicator.pos then
@@ -1395,7 +1396,6 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     local hasLos = UnitXP("inSight", "player", unitstr)
     if not hasLos then
         if healIndicator.type ~= typeNoLos then
-            -- TODO Location Config?
             healIndicator.tex:SetTexture(pfUI.media["img:NoLos"])
             healIndicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
             healIndicator.tex:Show()
@@ -1404,9 +1404,8 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         end
         healIndicator:Show()
         healIndicator:SetAlpha(1)
-    elseif pfUI.api.UnitIn20ydRange(unitstr) then -- TODO only if damaged
+    elseif UnitCanAssist("player", unitstr) and pfUI.api.UnitIn20ydRange(unitstr) then -- TODO only if damaged
         if healIndicator.type ~= type20yd then
-            -- TODO Location Config?
             healIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
             healIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
             healIndicator.tex:Show()
