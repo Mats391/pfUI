@@ -1763,6 +1763,7 @@ function pfUI.uf:RefreshUnit(unit, component)
             indicator:SetWidth(count*(size+1))
           end
         elseif isCharmedFriend then
+          -- TODO Separate from dispel icon logic
           debuff = "Mindcontrol"
           unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
           local indicator = unit.hp.bar.debuffindicators
