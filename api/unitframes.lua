@@ -1733,6 +1733,10 @@ function pfUI.uf:RefreshUnit(unit, component)
                 indicator[debuff].visible = true
               end
             end
+            
+            if indicator["Mindcontrol"] then
+              indicator["Mindcontrol"].visible = nil
+            end
 
             if indicator[debuff].visible then
               indicator[debuff]:Show()
