@@ -1437,7 +1437,7 @@ function pfUI.uf:RefreshUnitState(unit)
             if unit.hp.bar.healIndicator then
                 unit.hp.bar.healIndicator:Hide()
             end
-        elseif hasUnitxp then
+        else
             pfUI.uf:RefreshHealIndicator(unit, unitstr)
         end
     elseif unit.hp.bar.healIndicator then
