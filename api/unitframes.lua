@@ -1,6 +1,8 @@
 -- load pfUI environment
 setfenv(1, pfUI:GetEnvironment())
 
+local hasUnitxp = pcall(UnitXP, "nop", "nop")
+
 pfUI.uf = CreateFrame("Frame", nil, UIParent)
 pfUI.uf:SetScript("OnUpdate", function()
   if InCombatLockdown and not InCombatLockdown() then
@@ -1359,15 +1361,57 @@ function pfUI.uf:RefreshUnitState(unit)
   local alpha = unit.alpha_visible
   local unlock = pfUI.unlock and pfUI.unlock:IsShown() or nil
 
-  if not UnitIsConnected(unit.label .. unit.id) and not unlock then
-    -- offline
-    alpha = unit.alpha_offline
-    unit.hp.bar:SetMinMaxValues(0, 100, true)
-    unit.power.bar:SetMinMaxValues(0, 100, true)
-    unit.hp.bar:SetValue(0)
-    unit.power.bar:SetValue(0)
-  elseif unit.config.faderange == "1" and not pfUI.api.UnitInRange(unit.label .. unit.id, 4) and not unlock then
-    alpha = unit.alpha_outrange
+  if not unlock then
+    local unitstr = unit.label .. unit.id
+    if not UnitIsConnected(unitstr) then
+        -- offline
+        alpha = unit.alpha_offline
+        unit.hp.bar:SetMinMaxValues(0, 100, true)
+        unit.power.bar:SetMinMaxValues(0, 100, true)
+        unit.hp.bar:SetValue(0)
+        unit.power.bar:SetValue(0)
+    elseif unit.config.faderange == "1" then
+        if not pfUI.api.UnitInRange(unitstr) then
+            alpha = unit.alpha_outrange
+            if unit.hp.bar.losIndicator then
+                unit.hp.bar.losIndicator:Hide()
+            end
+        elseif hasUnitxp then
+            -- LOS indicator
+            unit.hp.bar.losIndicator = unit.hp.bar.losIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+            local losIndicator = unit.hp.bar.losIndicator
+            
+            local hasLos = UnitXP("inSight", "player", unitstr)
+            if not hasLos then
+                
+                -- TODO Size Config?
+                local size = unit.hp.bar:GetHeight() * 0.9
+                
+                losIndicator.tex = losIndicator.tex or losIndicator:CreateTexture(nil)
+                losIndicator.tex:SetAllPoints(losIndicator)
+                
+                if size ~= losIndicator.size then
+                    -- TODO Location Config?
+                    losIndicator.tex:SetTexture(pfUI.media["img:NoLos"])
+                    losIndicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
+                    losIndicator.tex:Show()
+                    losIndicator:ClearAllPoints()
+                    losIndicator:SetPoint("LEFT", 0, 0)
+                    losIndicator:SetHeight(size)
+                    losIndicator:SetWidth(size)
+                    losIndicator:SetBackdrop(nil)
+                  
+                    losIndicator.size = size
+                end
+                losIndicator:Show()
+                losIndicator:SetAlpha(1)
+            else
+                losIndicator:Hide()
+            end
+        end
+    elseif unit.hp.bar.losIndicator then
+        unit.hp.bar.losIndicator:Hide()
+    end
   end
 
   -- skip if alpha is already correct
