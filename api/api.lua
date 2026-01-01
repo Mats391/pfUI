@@ -71,11 +71,11 @@ function pfUI.api.UnitInRange(unit)
 end
 
 function pfUI.api.UnitIn20ydRange(unit)
-  if not UnitExists(unit) or not UnitIsVisible(unit) then
-    return nil
-  else
-    return librange:UnitIn20ydSpellRange(unit)
-  end
+  return librange:UnitIn20ydSpellRange(unit)
+end
+
+function pfUI.api.UnitIn10ydAoERange(unit)
+  return librange:UnitIn10ydAoERange(unit)
 end
 
 -- [ RunOOC ]

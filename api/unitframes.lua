@@ -1409,8 +1409,18 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         -- TODO Config
         -- TODO optimize if missing is 0?
         local minHealthMissing20yd = 1000
+        local minHealthMissing10yd = 300
         
-        if healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
+        if healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydAoERange(unitstr) then 
+            if healIndicator.type ~= type10ydAoe then
+                healIndicator.tex:SetTexture(pfUI.media["img:Heal10"])
+                healIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+                healIndicator.tex:Show()
+                healIndicator.type = type10ydAoe
+            end
+            healIndicator:Show()
+            healIndicator:SetAlpha(1)
+        elseif healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
             if healIndicator.type ~= type20yd then
                 healIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
                 healIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)

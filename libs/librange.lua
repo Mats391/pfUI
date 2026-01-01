@@ -87,6 +87,11 @@ if IsSpellInRange then
     if not spell20yd then return nil end
     return IsSpellInRange(spell20yd, unit) == 1 and true or nil
   end
+  
+  function librange:UnitIn10ydAoERange(unit)
+    local distance = UnitXP("distanceBetween", "player", unit, "aoe")
+    return distance <= 10
+  end
 
   -- add librange to pfUI API
   pfUI.api.librange = librange
