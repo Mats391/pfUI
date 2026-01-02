@@ -1633,8 +1633,7 @@ local pfDebuffColors = {
   ["Magic"]   = { 0.1, 0.7, 0.8, 1 },
   ["Poison"]  = { 0.2, 0.7, 0.3, 1 },
   ["Curse"]   = { 0.6, 0.2, 0.6, 1 },
-  ["Disease"] = { 0.9, 0.7, 0.2, 1 },
-  ["Mindcontrol"] = { 0.5, 0.0, 0.0, 1 }
+  ["Disease"] = { 0.9, 0.7, 0.2, 1 }
 }
 
 function pfUI.uf:RefreshUnit(unit, component)
@@ -1816,9 +1815,6 @@ function pfUI.uf:RefreshUnit(unit, component)
           local indipos = unit.config.debuff_ind_pos
           local count = 0
           local size
-          if indicator["Mindcontrol"] and indicator["Mindcontrol"].visible then
-            indicator["Mindcontrol"]:Hide()
-          end
 
           if disptype == "4" or disptype == "3" then
             size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
@@ -1915,51 +1911,40 @@ function pfUI.uf:RefreshUnit(unit, component)
           if disptype == "4" or disptype == "3" then
             indicator:SetWidth(count*(size+1))
           end
-        elseif isCharmedFriend then
-          -- TODO Separate from dispel icon logic
-          debuff = "Mindcontrol"
-          unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
-          local indicator = unit.hp.bar.debuffindicators
-          local indipos = unit.config.debuff_ind_pos
-          local size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
-          if size ~= indicator.size or indipos ~= indicator.ipos then
-            indicator:ClearAllPoints()
-            indicator:SetPoint(indipos, 0, 0)
-            indicator:SetHeight(size)
-            indicator:SetWidth(size)
-            indicator.size = size
-            indicator.disp = "4"
-            indicator.ipos = indipos
-          end
-          
-          indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
-          indicator[debuff]:SetParent(indicator)
-          indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
-          indicator[debuff].tex:SetAllPoints(indicator[debuff])
-          
-          if indicator.size ~= indicator[debuff].size then
-            indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
-            indicator[debuff].tex:SetVertexColor(unpack(pfDebuffColors[debuff]))
-            indicator[debuff].tex:Show()
-            indicator[debuff]:ClearAllPoints()
-            indicator[debuff]:SetHeight(size)
-            indicator[debuff]:SetWidth(size)
-            indicator[debuff]:SetBackdrop(nil)
-          
-            indicator[debuff].size = indicator.size
-            indicator[debuff].disp = indicator.disp
-          end
-          indicator:SetWidth(size+1)
-          
-          indicator[debuff]:Show()
-          indicator:Show()
-          indicator:SetAlpha(1)
-          indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", 0, 0)
         elseif unit.hp.bar.debuffindicators then
           unit.hp.bar.debuffindicators:Hide()
         end
     elseif unit.hp.bar.debuffindicators then
       unit.hp.bar.debuffindicators:Hide()
+    end
+    
+    if isCharmedFriend then
+        unit.hp.bar.mcIndicator = unit.hp.bar.mcIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+        local indicator = unit.hp.bar.mcIndicator
+        local indipos = "CENTER" -- TODO CONFIG
+        local size = unit.hp.bar:GetHeight() * 0.95 -- TODO CONFIG
+        
+        indicator.tex = indicator.tex or indicator:CreateTexture(nil)
+        indicator.tex:SetAllPoints(indicator)
+        
+        if size ~= indicator.size or indipos ~= indicator.ipos then
+            indicator.tex:SetTexture(pfUI.media["img:Mindcontrol"])
+            indicator.tex:SetVertexColor(0.5, 0.0, 0.0, 1)
+            indicator.tex:Show()
+            indicator:ClearAllPoints()
+            indicator:SetHeight(size)
+            indicator:SetWidth(size)
+            indicator:SetPoint(indipos, 0, 0)
+            indicator:SetBackdrop(nil)
+            
+            indicator.size = size
+            indicator.ipos = indipos
+        end
+        
+        indicator:Show()
+        indicator:SetAlpha(1)
+    elseif unit.hp.bar.mcIndicator then
+        unit.hp.bar.mcIndicator:Hide()
     end
 
     if not unit.indicators and unit.config.buff_indicator == "1" then
