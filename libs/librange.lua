@@ -76,8 +76,9 @@ if pfUI.expansion == "tbc" then
 end
 
 if IsSpellInRange then
-  local spell40yd = 635 -- Holy Light. TODO other healers
-  local spell20yd = 20473 -- Holy Shock. TODO other healers
+  -- Nampower check seems to work even with skills you dont have, so only need 1 for each
+  local spell40yd = 635 -- Holy Light
+  local spell20yd = 20473 -- Holy Shock
   function librange:UnitInSpellRange(unit)
     if not spell40yd then return nil end
     return IsSpellInRange(spell40yd, unit) == 1 and true or nil
