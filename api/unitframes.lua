@@ -1357,11 +1357,51 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   return f
 end
 
-function pfUI.uf:RefreshHealIndicator(unit, unitstr)
+function pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
     if not hasUnitxp then
-        return
+        return true -- No UnitXp, assume LOS
     end
     
+    -- No LOS indicator
+    unit.hp.bar.noLosIndicator = unit.hp.bar.noLosIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+    local indicator = unit.hp.bar.noLosIndicator
+        
+    -- TODO Size Config?
+    local size = unit.hp.bar:GetHeight() * 0.9
+    indicator.tex = indicator.tex or indicator:CreateTexture(nil)
+    indicator.tex:SetAllPoints(indicator)
+    
+    local pos = "RIGHT"
+    
+    if pos ~= indicator.pos then
+        indicator:ClearAllPoints()
+        indicator:SetPoint(pos, 0, 0)
+        indicator:SetBackdrop(nil)
+        indicator.pos = pos
+    end
+    
+    if size ~= indicator.size then
+        indicator:SetHeight(size)
+        indicator:SetWidth(size)
+        indicator.size = size
+    end
+    
+    local hasLos = UnitXP("inSight", "player", unitstr)
+    if not hasLos then
+        indicator.tex:SetTexture(pfUI.media["img:NoLos"])
+        indicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
+        indicator.tex:Show()
+          
+        indicator:Show()
+        indicator:SetAlpha(1)
+        return false -- No LOS
+    end
+    
+    indicator:Hide()
+    return true -- has LOS
+end
+
+function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     -- Heal indicator LOS
     unit.hp.bar.healIndicator = unit.hp.bar.healIndicator or CreateFrame("Frame", nil, unit.hp.bar)
     local healIndicator = unit.hp.bar.healIndicator
@@ -1372,9 +1412,8 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     healIndicator.tex = healIndicator.tex or healIndicator:CreateTexture(nil)
     healIndicator.tex:SetAllPoints(healIndicator)
     
-    -- 0: No Los, 1: 20yd, 2: 10yd AOE
+    -- 1: 20yd, 2: 10yd AOE
     healIndicator.type = nil
-    local typeNoLos = 0
     local type20yd = 1
     local type10ydAoe = 2
     -- TODO Location Config?
@@ -1393,23 +1432,12 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         healIndicator.size = size
     end
     
-    local hasLos = UnitXP("inSight", "player", unitstr)
-    if not hasLos then
-        if healIndicator.type ~= typeNoLos then
-            healIndicator.tex:SetTexture(pfUI.media["img:NoLos"])
-            healIndicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
-            healIndicator.tex:Show()
-          
-            healIndicator.type = typeNoLos
-        end
-        healIndicator:Show()
-        healIndicator:SetAlpha(1)
-    elseif UnitCanAssist("player", unitstr) then
+    if UnitCanAssist("player", unitstr) then
         local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
         -- TODO Config
         -- TODO optimize if missing is 0?
-        local minHealthMissing20yd = 1000
-        local minHealthMissing10yd = 300
+        local minHealthMissing20yd = 0
+        local minHealthMissing10yd = 0
         
         if healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydAoERange(unitstr) then 
             if healIndicator.type ~= type10ydAoe then
@@ -1457,7 +1485,10 @@ function pfUI.uf:RefreshUnitState(unit)
                 unit.hp.bar.healIndicator:Hide()
             end
         else
-            pfUI.uf:RefreshHealIndicator(unit, unitstr)
+            local hasLos = pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
+            if hasLos then
+                pfUI.uf:RefreshHealIndicator(unit, unitstr)
+            end
         end
     elseif unit.hp.bar.healIndicator then
         unit.hp.bar.healIndicator:Hide()
