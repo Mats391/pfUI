@@ -1402,15 +1402,19 @@ function pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
 end
 
 function pfUI.uf:RefreshHealIndicator(unit, unitstr)
+    -- Are they even enabled?
+    if not unit.config.heal_ind_20yd and not unit.config.heal_ind_10yd then
+        if unit.hp.bar.healIndicator then
+            unit.hp.bar.healIndicator:Hide()
+        end
+        return
+    end
     -- Heal indicator LOS
     unit.hp.bar.healIndicator = unit.hp.bar.healIndicator or CreateFrame("Frame", nil, unit.hp.bar)
     local indicator = unit.hp.bar.healIndicator
     
-    -- TODO Size Config?
-    local size = unit.hp.bar:GetHeight() * 0.9
-        
-    -- TODO Location Config?
-    local healPos = "RIGHT"
+    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.heal_ind_size)
+    local healPos = unit.config.heal_ind_pos
     
     if healPos ~= indicator.pos then
         indicator:ClearAllPoints()
@@ -1426,17 +1430,17 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     
     if UnitCanAssist("player", unitstr) and not UnitIsDead(unitstr) then
         local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
-        -- TODO Config
-        -- TODO optimize if missing is 0?
-        local minHealthMissing20yd = 1000
-        local minHealthMissing10yd = 300
                 
         -- 1: 20yd, 2: 10yd AOE
         indicator.type = nil
         local type20yd = 1
         local type10yd = 2
+        local show10yd = unit.config.heal_ind_10yd
+        local show20yd = unit.config.heal_ind_20yd
+        local minHealthMissing10yd = tonumber(unit.config.heal_ind_10yd_hp)
+        local minHealthMissing20yd = tonumber(unit.config.heal_ind_20yd_hp)
         
-        if healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
+        if show10yd and healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
             indicator[type10yd] = indicator[type10yd] or CreateFrame("Frame", nil, indicator)
             subIndicator = indicator[type10yd]
             subIndicator:SetParent(indicator)
@@ -1460,7 +1464,7 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         elseif indicator[type10yd] then
             indicator[type10yd]:Hide()
         end
-        if healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
+        if show20yd and healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
             indicator[type20yd] = indicator[type20yd] or CreateFrame("Frame", nil, indicator)
             subIndicator = indicator[type20yd]
             subIndicator:SetParent(indicator)

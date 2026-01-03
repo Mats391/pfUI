@@ -513,6 +513,10 @@ function pfUI:LoadConfig()
     pfUI:UpdateConfig("unitframes", unit,      "customfont_name",  "Interface\\AddOns\\pfUI\\fonts\\BigNoodleTitling.ttf")
     pfUI:UpdateConfig("unitframes", unit,      "customfont_size",  "12")
     pfUI:UpdateConfig("unitframes", unit,      "customfont_style", "OUTLINE")
+    pfUI:UpdateConfig("unitframes", unit,      "heal_ind_pos", "RIGHT")
+    pfUI:UpdateConfig("unitframes", unit,      "heal_ind_size", ".90")
+    pfUI:UpdateConfig("unitframes", unit,      "heal_ind_20yd_hp", "0")
+    pfUI:UpdateConfig("unitframes", unit,      "heal_ind_10yd_hp", "0")
   end
 
   pfUI:UpdateConfig("bars",       "bar1",        "pageable",         "1")
