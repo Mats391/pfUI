@@ -1362,16 +1362,22 @@ function pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
         return true -- No UnitXp, assume LOS
     end
     
+    if not unit.config.los_ind then
+        if unit.hp.bar.noLosIndicator then
+            unit.hp.bar.noLosIndicator:Hide()
+        end
+        return true -- not checking, assume LOS
+    end
+    
     -- No LOS indicator
     unit.hp.bar.noLosIndicator = unit.hp.bar.noLosIndicator or CreateFrame("Frame", nil, unit.hp.bar)
     local indicator = unit.hp.bar.noLosIndicator
         
-    -- TODO Size Config?
-    local size = unit.hp.bar:GetHeight() * 0.9
+    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.los_ind_size)
     indicator.tex = indicator.tex or indicator:CreateTexture(nil)
     indicator.tex:SetAllPoints(indicator)
     
-    local pos = "RIGHT"
+    local pos = unit.config.los_ind_pos
     
     if pos ~= indicator.pos then
         indicator:ClearAllPoints()

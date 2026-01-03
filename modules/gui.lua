@@ -1869,6 +1869,11 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         CreateConfig(U[c], T["Only for min HP lost"], C.unitframes[c], "heal_ind_20yd_hp")
         CreateConfig(U[c], T["Show 10yd indicator"], C.unitframes[c], "heal_ind_10yd", "checkbox")
         CreateConfig(U[c], T["Only for min HP lost"], C.unitframes[c], "heal_ind_10yd_hp")
+        
+        CreateConfig(U[c], T["LOS Indicators (Requires UnitXp)"], nil, nil, "header")
+        CreateConfig(U[c], T["Show indicator"], C.unitframes[c], "los_ind", "checkbox")
+        CreateConfig(U[c], T["Indicator Position"], C.unitframes[c], "los_ind_pos", "dropdown", pfUI.gui.dropdowns.positions)
+        CreateConfig(U[c], T["Indicator Size"], C.unitframes[c], "los_ind_size", "dropdown", pfUI.gui.dropdowns.uf_debuff_indicator_size)
 
         CreateConfig(U[c], T["Overwrite Fonts"], nil, nil, "header")
         CreateConfig(U[c], T["Use Custom Font Settings"], C.unitframes[c], "customfont", "checkbox")
