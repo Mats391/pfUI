@@ -1933,11 +1933,11 @@ function pfUI.uf:RefreshUnit(unit, component)
       unit.hp.bar.debuffindicators:Hide()
     end
     
-    if isCharmedFriend then
+    if isCharmedFriend and unit.config.charm_ind then
         unit.hp.bar.mcIndicator = unit.hp.bar.mcIndicator or CreateFrame("Frame", nil, unit.hp.bar)
         local indicator = unit.hp.bar.mcIndicator
-        local indipos = "CENTER" -- TODO CONFIG
-        local size = unit.hp.bar:GetHeight() * 0.95 -- TODO CONFIG
+        local indipos = unit.config.charm_ind_pos
+        local size = unit.hp.bar:GetHeight() * tonumber(unit.config.charm_ind_size)
         
         indicator.tex = indicator.tex or indicator:CreateTexture(nil)
         indicator.tex:SetAllPoints(indicator)

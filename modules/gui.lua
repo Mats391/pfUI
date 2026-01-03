@@ -1862,6 +1862,11 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         CreateConfig(U[c], T["Indicator Position"], C.unitframes[c], "debuff_ind_pos", "dropdown", pfUI.gui.dropdowns.positions)
         CreateConfig(U[c], T["Indicator Size"], C.unitframes[c], "debuff_ind_size", "dropdown", pfUI.gui.dropdowns.uf_debuff_indicator_size)
         
+        CreateConfig(U[c], T["Charm/Mindcontrol Indicator"], nil, nil, "header")
+        CreateConfig(U[c], T["Show indicator"], C.unitframes[c], "charm_ind", "checkbox")
+        CreateConfig(U[c], T["Indicator Position"], C.unitframes[c], "charm_ind_pos", "dropdown", pfUI.gui.dropdowns.positions)
+        CreateConfig(U[c], T["Indicator Size"], C.unitframes[c], "charm_ind_size", "dropdown", pfUI.gui.dropdowns.uf_debuff_indicator_size)
+        
         CreateConfig(U[c], T["Heal Indicators (requires rage fading+nampower)"], nil, nil, "header")
         CreateConfig(U[c], T["Indicator Position"], C.unitframes[c], "heal_ind_pos", "dropdown", pfUI.gui.dropdowns.positions)
         CreateConfig(U[c], T["Indicator Size"], C.unitframes[c], "heal_ind_size", "dropdown", pfUI.gui.dropdowns.uf_debuff_indicator_size)

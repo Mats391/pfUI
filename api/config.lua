@@ -519,6 +519,8 @@ function pfUI:LoadConfig()
     pfUI:UpdateConfig("unitframes", unit,      "heal_ind_10yd_hp", "0")
     pfUI:UpdateConfig("unitframes", unit,      "los_ind_size", ".90")
     pfUI:UpdateConfig("unitframes", unit,      "los_ind_pos", "RIGHT")
+    pfUI:UpdateConfig("unitframes", unit,      "charm_ind_pos", "CENTER")
+    pfUI:UpdateConfig("unitframes", unit,      "charm_ind_size", ".90")
   end
 
   pfUI:UpdateConfig("bars",       "bar1",        "pageable",         "1")
