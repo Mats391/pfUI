@@ -1508,6 +1508,9 @@ function pfUI.uf:RefreshUnitState(unit)
             if unit.hp.bar.healIndicator then
                 unit.hp.bar.healIndicator:Hide()
             end
+            if unit.hp.bar.noLosIndicator then
+                unit.hp.bar.noLosIndicator:Hide()
+            end
         else
             local hasLos = pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
             if hasLos then
