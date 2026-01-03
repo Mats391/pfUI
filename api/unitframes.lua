@@ -1415,6 +1415,14 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         end
         return
     end
+    
+    
+    if not UnitCanAssist("player", unitstr) or UnitIsDeadOrGhost(unitstr) then
+        if unit.hp.bar.healIndicator then
+            unit.hp.bar.healIndicator:Hide()
+        end
+        return
+    end
     -- Heal indicator LOS
     unit.hp.bar.healIndicator = unit.hp.bar.healIndicator or CreateFrame("Frame", nil, unit.hp.bar)
     local indicator = unit.hp.bar.healIndicator
@@ -1434,68 +1442,65 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         indicator.size = size
     end
     
-    if UnitCanAssist("player", unitstr) and not UnitIsDeadOrGhost(unitstr) then
-        local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
-                
-        -- 1: 20yd, 2: 10yd AOE
-        indicator.type = nil
-        local type20yd = 1
-        local type10yd = 2
-        local show10yd = unit.config.heal_ind_10yd
-        local show20yd = unit.config.heal_ind_20yd
-        local minHealthMissing10yd = tonumber(unit.config.heal_ind_10yd_hp)
-        local minHealthMissing20yd = tonumber(unit.config.heal_ind_20yd_hp)
-        
-        if show10yd and healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
-            indicator[type10yd] = indicator[type10yd] or CreateFrame("Frame", nil, indicator)
-            subIndicator = indicator[type10yd]
-            subIndicator:SetParent(indicator)
-            subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
-            subIndicator.tex:SetAllPoints(subIndicator)
-            if size ~= subIndicator.size then
-                subIndicator.tex:SetTexture(pfUI.media["img:Heal10"])
-                subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
-                subIndicator.tex:Show()
-                subIndicator:ClearAllPoints()
-                subIndicator:SetHeight(size)
-                subIndicator:SetWidth(size)
-                subIndicator:SetBackdrop(nil)
-                subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
-                subIndicator.size = size
-            end
-            subIndicator:Show()
-            subIndicator:SetAlpha(1)
-            indicator:Show()
-            indicator:SetAlpha(1)
-        elseif indicator[type10yd] then
-            indicator[type10yd]:Hide()
+    local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
+            
+    -- 1: 20yd, 2: 10yd AOE
+    indicator.type = nil
+    local type20yd = 1
+    local type10yd = 2
+    local show10yd = unit.config.heal_ind_10yd
+    local show20yd = unit.config.heal_ind_20yd
+    local minHealthMissing10yd = tonumber(unit.config.heal_ind_10yd_hp)
+    local minHealthMissing20yd = tonumber(unit.config.heal_ind_20yd_hp)
+    local alpha = tonumber(unit.config.heal_ind_alpha)
+    
+    if show10yd and healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
+        indicator[type10yd] = indicator[type10yd] or CreateFrame("Frame", nil, indicator)
+        subIndicator = indicator[type10yd]
+        subIndicator:SetParent(indicator)
+        subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
+        subIndicator.tex:SetAllPoints(subIndicator)
+        if size ~= subIndicator.size then
+            subIndicator.tex:SetTexture(pfUI.media["img:Heal10"])
+            subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+            subIndicator.tex:Show()
+            subIndicator:ClearAllPoints()
+            subIndicator:SetHeight(size)
+            subIndicator:SetWidth(size)
+            subIndicator:SetBackdrop(nil)
+            subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
+            subIndicator.size = size
         end
-        if show20yd and healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
-            indicator[type20yd] = indicator[type20yd] or CreateFrame("Frame", nil, indicator)
-            subIndicator = indicator[type20yd]
-            subIndicator:SetParent(indicator)
-            subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
-            subIndicator.tex:SetAllPoints(subIndicator)
-            if size ~= subIndicator.size then
-                subIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
-                subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
-                subIndicator.tex:Show()
-                subIndicator:ClearAllPoints()
-                subIndicator:SetHeight(size)
-                subIndicator:SetWidth(size)
-                subIndicator:SetBackdrop(nil)
-                subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
-                subIndicator.size = size
-            end
-            subIndicator:Show()
-            subIndicator:SetAlpha(1)
-            indicator:Show()
-            indicator:SetAlpha(1)
-        elseif indicator[type20yd] then
-            indicator[type20yd]:Hide()
+        subIndicator:Show()
+        subIndicator:SetAlpha(alpha)
+        indicator:Show()
+        indicator:SetAlpha(1)
+    elseif indicator[type10yd] then
+        indicator[type10yd]:Hide()
+    end
+    if show20yd and healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
+        indicator[type20yd] = indicator[type20yd] or CreateFrame("Frame", nil, indicator)
+        subIndicator = indicator[type20yd]
+        subIndicator:SetParent(indicator)
+        subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
+        subIndicator.tex:SetAllPoints(subIndicator)
+        if size ~= subIndicator.size then
+            subIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
+            subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+            subIndicator.tex:Show()
+            subIndicator:ClearAllPoints()
+            subIndicator:SetHeight(size)
+            subIndicator:SetWidth(size)
+            subIndicator:SetBackdrop(nil)
+            subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
+            subIndicator.size = size
         end
-    else
-        indicator:Hide()
+        subIndicator:Show()
+        subIndicator:SetAlpha(alpha)
+        indicator:Show()
+        indicator:SetAlpha(1)
+    elseif indicator[type20yd] then
+        indicator[type20yd]:Hide()
     end
 end
 
