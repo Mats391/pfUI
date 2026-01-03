@@ -74,8 +74,8 @@ function pfUI.api.UnitIn20ydRange(unit)
   return librange:UnitIn20ydSpellRange(unit)
 end
 
-function pfUI.api.UnitIn10ydAoERange(unit)
-  return librange:UnitIn10ydAoERange(unit)
+function pfUI.api.UnitIn10ydRange(unit)
+  return librange:UnitIn10ydSpellRange(unit)
 end
 
 -- [ RunOOC ]

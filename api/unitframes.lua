@@ -1434,11 +1434,11 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         -- 1: 20yd, 2: 10yd AOE
         indicator.type = nil
         local type20yd = 1
-        local type10ydAoe = 2
+        local type10yd = 2
         
-        if healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydAoERange(unitstr) then 
-            indicator[type10ydAoe] = indicator[type10ydAoe] or CreateFrame("Frame", nil, indicator)
-            subIndicator = indicator[type10ydAoe]
+        if healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
+            indicator[type10yd] = indicator[type10yd] or CreateFrame("Frame", nil, indicator)
+            subIndicator = indicator[type10yd]
             subIndicator:SetParent(indicator)
             subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
             subIndicator.tex:SetAllPoints(subIndicator)
@@ -1457,8 +1457,8 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
             subIndicator:SetAlpha(1)
             indicator:Show()
             indicator:SetAlpha(1)
-        elseif indicator[type10ydAoe] then
-            indicator[type10ydAoe]:Hide()
+        elseif indicator[type10yd] then
+            indicator[type10yd]:Hide()
         end
         if healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
             indicator[type20yd] = indicator[type20yd] or CreateFrame("Frame", nil, indicator)

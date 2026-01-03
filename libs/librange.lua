@@ -79,19 +79,17 @@ if IsSpellInRange then
   -- Nampower check seems to work even with skills you dont have, so only need 1 for each
   local spell40yd = 635 -- Holy Light
   local spell20yd = 20473 -- Holy Shock
+  local spell10yd = 51301 -- Mending Light. Holy Strike heal
   function librange:UnitInSpellRange(unit)
-    if not spell40yd then return nil end
     return IsSpellInRange(spell40yd, unit) == 1 and true or nil
   end
   
   function librange:UnitIn20ydSpellRange(unit)
-    if not spell20yd then return nil end
     return IsSpellInRange(spell20yd, unit) == 1 and true or nil
   end
   
-  function librange:UnitIn10ydAoERange(unit)
-    local distance = UnitXP("distanceBetween", "player", unit, "aoe")
-    return distance <= 10
+  function librange:UnitIn10ydSpellRange(unit)
+    return IsSpellInRange(spell10yd, unit) == 1 and true or nil
   end
 
   -- add librange to pfUI API
