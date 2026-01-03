@@ -69,6 +69,14 @@ if pfUI.expansion == "tbc" then
     if not spell then return nil end
     return IsSpellInRange(spell, unit) == 1 and true or nil
   end
+  
+    function librange:UnitIn20ydSpellRange(unit)
+      return false
+    end
+    
+    function librange:UnitIn10ydSpellRange(unit)
+      return false
+    end
 
   -- add librange to pfUI API
   pfUI.api.librange = librange
@@ -301,6 +309,14 @@ function librange:UnitInSpellRange(unit)
   else
     return nil
   end
+end
+
+function librange:UnitIn20ydSpellRange(unit)
+  return false
+end
+
+function librange:UnitIn10ydSpellRange(unit)
+  return false
 end
 
 -- add librange to pfUI API
