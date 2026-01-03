@@ -71,10 +71,16 @@ function pfUI.api.UnitInRange(unit)
 end
 
 function pfUI.api.UnitIn20ydRange(unit)
+  if not librange:UnitIn20ydSpellRange then
+    return false
+  end
   return librange:UnitIn20ydSpellRange(unit)
 end
 
 function pfUI.api.UnitIn10ydRange(unit)
+  if not librange:UnitIn10ydSpellRange then
+    return false
+  end
   return librange:UnitIn10ydSpellRange(unit)
 end
 
