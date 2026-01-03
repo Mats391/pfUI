@@ -1424,7 +1424,7 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         indicator.size = size
     end
     
-    if UnitCanAssist("player", unitstr) then
+    if UnitCanAssist("player", unitstr) and not UnitIsDead(unitstr) then
         local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
         -- TODO Config
         -- TODO optimize if missing is 0?
