@@ -1515,6 +1515,8 @@ function pfUI.uf:RefreshUnitState(unit)
             local hasLos = pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
             if hasLos then
                 pfUI.uf:RefreshHealIndicator(unit, unitstr)
+            elseif unit.hp.bar.healIndicator then
+                unit.hp.bar.healIndicator:Hide()
             end
         end
     else
