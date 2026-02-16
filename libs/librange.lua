@@ -79,28 +79,10 @@ if GetNampowerVersion then
     else return nil end
   end
   
-    function librange:UnitIn20ydSpellRange(unit)
-      return false
-    end
-    
-    function librange:UnitIn10ydSpellRange(unit)
-      return false
-    end
-
-  -- add librange to pfUI API
-  pfUI.api.librange = librange
-  return
-end
-
-if IsSpellInRange then
   -- Nampower check seems to work even with skills you dont have, so only need 1 for each
   local spell40yd = 635 -- Holy Light
   local spell20yd = 20473 -- Holy Shock
   local spell10yd = 51301 -- Mending Light. Holy Strike heal
-  function librange:UnitInSpellRange(unit)
-    return IsSpellInRange(spell40yd, unit) == 1 and true or nil
-  end
-  
   function librange:UnitIn20ydSpellRange(unit)
     return IsSpellInRange(spell20yd, unit) == 1 and true or nil
   end
