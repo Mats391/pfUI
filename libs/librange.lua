@@ -43,33 +43,46 @@ local spells = {
 
 -- Use Nampower's IsSpellInRange if available (vanilla only)
 -- This provides more accurate range checking without needing to find spell slots
+local nampower_spell
 if GetNampowerVersion then
-  -- Nampower check seems to work even with skills you dont have, so only need 1 for each
-  local spell40yd = 635 -- Holy Light
-  local spellEnemy40yd = 11538 -- Random 40yd Frostbolt spell
-  local spell20yd = 20473 -- Holy Shock
-  local spell10yd = 51301 -- Mending Light. Holy Strike heal
+  librange:RegisterEvent("LEARNED_SPELL_IN_TAB")
+  librange:RegisterEvent("PLAYER_ENTERING_WORLD")
+  librange:SetScript("OnEvent", function()
+    -- abort on non healing classes
+    if not spells[class] then return end
+
+    nampower_spell = nil
+
+    for i = 1, GetNumSpellTabs() do
+      local _, _, offset, num = GetSpellTabInfo(i)
+      for id = offset + 1, offset + num do
+        local name, rank = GetSpellName(id, BOOKTYPE_SPELL)
+        local texture = GetSpellTexture(id, BOOKTYPE_SPELL)
+
+        if texture then
+          for _, tex in pairs(spells[class]) do
+            if tex == texture then
+              nampower_spell = name
+            end
+          end
+        end
+      end
+    end
+  end)
 
   function librange:UnitInSpellRange(unit)
+    if not nampower_spell then return nil end
     -- Nampower's IsSpellInRange returns 1 if in range, 0 if not, -1 if invalid
-    if UnitIsFriend(unit, "player") then
-        local result = IsSpellInRange(spell40yd, unit)
-        if result == 1 then 
-            return 1
-        else
-            return nil
-        end
-    else
-        -- Unfriendly target, try with spell that targets enemy
-        local result = IsSpellInRange(spellEnemy40yd, unit)
-        if result == 1 then 
-            return 1
-        else 
-            return nil
-        end
-    end
+    local result = IsSpellInRange(nampower_spell, unit)
+    if result == 1 then return 1
+    elseif result == 0 then return nil
+    else return nil end
   end
   
+  -- Nampower check seems to work even with skills you dont have, so only need 1 for each
+  local spell40yd = 635 -- Holy Light
+  local spell20yd = 20473 -- Holy Shock
+  local spell10yd = 51301 -- Mending Light. Holy Strike heal
   function librange:UnitIn20ydSpellRange(unit)
     return IsSpellInRange(spell20yd, unit) == 1 and true or nil
   end
