@@ -476,6 +476,28 @@ function pfUI.uf:DetectBuff(name, id)
   return nil
 end
 
+function pfUI.uf:GetRaidFrameId()
+    local self = self or this
+    -- cache result of strsub to avoid repeating calls
+    if not self.cache_raid then
+        if strsub(self:GetName(),0,6) == "pfRaid" then
+            self.cache_raid = tonumber(strsub(self:GetName(),7,8))
+        else
+            self.cache_raid = 0
+        end
+    end
+    
+    return self.cache_raid
+end
+
+function pfUI.uf:CanAssist(unit, unitstr)
+    if unit:GetRaidFrameId() > 0 then
+        return true
+    end
+
+    return UnitCanAssist("player", unitstr)
+end
+
 function pfUI.uf:UpdateVisibility()
   local self = self or this
 
@@ -485,19 +507,9 @@ function pfUI.uf:UpdateVisibility()
     return
   end
 
-  -- cache result of strsub to avoid repeating calls
-  if not self.cache_raid then
-    if strsub(self:GetName(),0,6) == "pfRaid" then
-      self.cache_raid = tonumber(strsub(self:GetName(),7,8))
-    else
-      self.cache_raid = 0
-    end
-  end
-
   -- show groupframes as raid
-  if self.cache_raid > 0 then
-    local id = self.cache_raid
-
+  local id = self:GetRaidFrameId()
+  if id > 0 then
     -- always show self in raidframes
     if not UnitInRaid("player") and GetNumPartyMembers() == 0 and C.unitframes.selfinraid == "1" and id == 1 then
       self.id = ""
@@ -1847,6 +1859,7 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   f.EnableEvents     = pfUI.uf.EnableEvents
   f.EnableClickCast  = pfUI.uf.EnableClickCast
   f.GetColor         = pfUI.uf.GetColor
+  f.GetRaidFrameId   = pfUI.uf.GetRaidFrameId
 
   -- cache values to the frame
   f.label = strlower(unit)
@@ -2011,7 +2024,7 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     end
     
     
-    if not UnitCanAssist("player", unitstr) or UnitIsDeadOrGhost(unitstr) then
+    if not pfUI.uf:CanAssist(unit, unitstr) or UnitIsDeadOrGhost(unitstr) then
         if unit.hp.bar.healIndicator then
             unit.hp.bar.healIndicator:Hide()
         end
@@ -2416,11 +2429,11 @@ function pfUI.uf:RefreshUnit(unit, component)
       unit.dispellable = {}
     end
 
-    local canCleanse = UnitCanAssist("player", unitstr)
-    local isCharmedFriend = not canCleanse and UnitIsCharmed(unitstr)
+    local canAssist = pfUI.uf:CanAssist(unit, unitstr)
+    local isCharmedFriend = not canAssist and UnitIsCharmed(unitstr)
     
     if table.getn(unit.dispellable) > 0 then
-      if canCleanse then
+      if canAssist then
           unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
 
           -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
