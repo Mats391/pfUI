@@ -2430,7 +2430,7 @@ function pfUI.uf:RefreshUnit(unit, component)
     end
 
     local canAssist = pfUI.uf:CanAssist(unit, unitstr)
-    local isCharmedFriend = not canAssist and UnitIsCharmed(unitstr)
+    local isCharmedFriend = (unit:GetRaidFrameId() > 0 or not canAssist) and UnitIsCharmed(unitstr)
     
     if table.getn(unit.dispellable) > 0 then
       if canAssist then
