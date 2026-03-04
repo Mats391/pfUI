@@ -255,6 +255,20 @@ end)
 -- Cache für Stats-Tracking (nur Änderungen zählen)
 pfUI.api.lastUnitStats = pfUI.api.lastUnitStats or {}
 
+function pfUI.api.IsUnitCharmed(unitstr)
+    if GetUnitField then
+      -- Get guid via the extended UnitExists for Nampower
+      local _, guid = _G.UnitExists(unitstr)
+      if not guid then
+        return false
+      end
+      charmedBy = GetUnitField(guid, "charmedBy")
+      return charmedBy ~= '0x0000000000000000'
+    end
+    
+    return UnitIsCharmed(unitstr)
+end
+
 function pfUI.api.GetUnitStats(unitstr, trackStats)
   local hp, maxHp, power, maxPower, powerType
   local usedNampower = false
@@ -2430,7 +2444,7 @@ function pfUI.uf:RefreshUnit(unit, component)
     end
 
     local canAssist = pfUI.uf:CanAssist(unit, unitstr)
-    local isCharmedFriend = (unit:GetRaidFrameId() > 0 or not canAssist) and UnitIsCharmed(unitstr)
+    local isCharmedFriend = (unit:GetRaidFrameId() > 0 or not canAssist) and pfUI.api.IsUnitCharmed(unitstr)
     
     if table.getn(unit.dispellable) > 0 then
       if canAssist then
