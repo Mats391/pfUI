@@ -70,19 +70,17 @@ if GetNampowerVersion then
     end
   end)
 
-  function librange:UnitInSpellRange(unit)
-    if not nampower_spell then return nil end
-    -- Nampower's IsSpellInRange returns 1 if in range, 0 if not, -1 if invalid
-    local result = IsSpellInRange(nampower_spell, unit)
-    if result == 1 then return 1
-    elseif result == 0 then return nil
-    else return nil end
-  end
+
   
   -- Nampower check seems to work even with skills you dont have, so only need 1 for each
   local spell40yd = 635 -- Holy Light
   local spell20yd = 20473 -- Holy Shock
   local spell10yd = 51301 -- Mending Light. Holy Strike heal
+  function librange:UnitInSpellRange(unit)
+    return IsSpellInRange(spell40yd, unit) == 1 and true or nil
+  end
+  
+  
   function librange:UnitIn20ydSpellRange(unit)
     return IsSpellInRange(spell20yd, unit) == 1 and true or nil
   end
