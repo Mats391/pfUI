@@ -139,8 +139,6 @@ local RangeCache = {}
 function pfUI.api.UnitInRange(unit)
   if not UnitExists(unit) or not UnitIsVisible(unit) then
     return nil
-  elseif CheckInteractDistance(unit, 4) then
-    return 1
   else
     return librange:UnitInSpellRange(unit)
   end
