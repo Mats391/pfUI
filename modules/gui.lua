@@ -25,7 +25,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
             ufunc = function()
               for _, fr in ipairs(pfUI.uf.frames) do
                 if fr.label == key then
-                  pfUI.uf.UpdateConfig(fr)
+                  fr:UpdateConfig()
                 end
               end
             end
@@ -2169,9 +2169,11 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Reactive Indicator Size"], C.unitframes, "reactive_size", nil, nil, nil, nil, nil, "vanilla" )
 
       CreateConfig(nil, T["UnitXP Settings"], nil, nil, "header")
+      CreateConfig(nil, T["Font Size for all UnitXP texts"], C.unitframes, "unitxp_font_size", nil, nil, nil, nil, nil, "vanilla" )
       CreateConfig(nil, T["Show Line of Sight Indicator"], C.unitframes, "los_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
       CreateConfig(nil, T["Show Behind Indicator"], C.unitframes, "behind_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
       CreateConfig(nil, T["Show Distance of Target"], C.unitframes, "distance_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
+      CreateConfig(nil, T["Hide yd characters"], C.unitframes, "hide_distance_yd", "checkbox", nil, nil, nil, nil, "vanilla" )
       CreateConfig(nil, T["Hook Distance to Portrait Frame"], C.unitframes, "distance_hook_portrait", "checkbox", nil, nil, nil, nil, "vanilla" )
       CreateConfig(nil, T["Enable OS Notifications"], C.unitframes, "unitxp_notify", "checkbox", nil, nil, nil, nil, "vanilla" )
     end)
@@ -2420,16 +2422,16 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         CreateConfig(U[c], T["Focus Color"], C.unitframes[c], "focuscolor", "color")
 
         if c == "player" then
-          CreateConfig(U[c], T["Player SP/Haste Display"], nil, nil, "header")
-          CreateConfig(U[c], T["Haste Display"], C.unitframes[c], "display_haste", "dropdown", {
+          CreateConfig(nil, T["Player SP/Haste Display"], nil, nil, "header")
+          CreateConfig(nil, T["Haste Display"], C.unitframes[c], "display_haste", "dropdown", {
             "0:"..T["None"],
             "1:"..T["Haste (cast speed increase)"],
             "2:"..T["Effective Haste (Haste * cast time reduction)"], -- Only affects mages/warlocks I believe
           })
-          CreateConfig(U[c], T["Haste Display Color"], C.unitframes[c], "display_haste_color", "color")
-          CreateConfig(U[c], T["Display Spell Power"], C.unitframes[c], "display_spellpower", "checkbox")
-          CreateConfig(U[c], T["Use Custom Spell Power Color (unchecked = biggest school color)"], C.unitframes[c], "display_sp_color_override", "checkbox")
-          CreateConfig(U[c], T["Spell Power Color"], C.unitframes[c], "display_sp_color", "color")
+          CreateConfig(nil, T["Haste Display Color"], C.unitframes[c], "display_haste_color", "color")
+          CreateConfig(nil, T["Display Spell Power"], C.unitframes[c], "display_spellpower", "checkbox")
+          CreateConfig(nil, T["Use Custom Spell Power Color (unchecked = biggest school color)"], C.unitframes[c], "display_sp_color_override", "checkbox")
+          CreateConfig(nil, T["Spell Power Color"], C.unitframes[c], "display_sp_color", "color")
         end
       end)
     end
