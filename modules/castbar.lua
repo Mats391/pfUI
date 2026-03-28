@@ -107,6 +107,8 @@ pfUI:RegisterModule("castbar", "vanilla", function ()
       local focusGuid = nil
       if this.unitstr and string.find(this.unitstr, "^0x") then
         focusGuid = this.unitstr
+      elseif this.unitstr and this.unitstr == "player" and GetUnitGUID then
+        focusGuid = GetUnitGUID("player")
       elseif this.unitstr and this.unitstr ~= "player" then
         local guid = GetUnitGUID(this.unitstr)
         if guid then focusGuid = guid end
@@ -125,7 +127,12 @@ pfUI:RegisterModule("castbar", "vanilla", function ()
           texture = castData.icon
           startTime = castData.startTime * 1000
           endTime = castData.endTime * 1000
-          nameSubtext = ""
+          -- Try to get rank from spell DB via spellID (nameSubtext is not stored in libdebuff_casts)
+          if castData.spellID and GetSpellRecField then
+            nameSubtext = GetSpellRecField(castData.spellID, "rank") or ""
+          else
+            nameSubtext = ""
+          end
           if castData.event == "CHANNEL" then
             channel = cast
           end
@@ -139,12 +146,12 @@ pfUI:RegisterModule("castbar", "vanilla", function ()
         query = UnitName("player")
       end
 
-      -- Fallback: pfGetCastInfo only when no focusGuid (Nampower not available for this unit)
-      if not cast and not castBlocked and not focusGuid and pfGetCastInfo then
+      -- Fallback: pfGetCastInfo only when no focusGuid or no cast found via libdebuff
+      if not cast and not castBlocked and pfGetCastInfo then
         cast, nameSubtext, text, texture, startTime, endTime, isTradeSkill = pfGetCastInfo(query)
       end
 
-      if not cast and not castBlocked and not focusGuid and pfGetChannelInfo then
+      if not cast and not castBlocked and pfGetChannelInfo then
         channel, nameSubtext, text, texture, startTime, endTime, isTradeSkill = pfGetChannelInfo(this.unitstr or this.unitname)
         cast = channel
       end
