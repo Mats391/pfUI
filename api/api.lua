@@ -164,7 +164,12 @@ function pfUI.api.UnitIn20ydRange(unit)
 end
 
 function pfUI.api.UnitIn10ydRange(unit)
-  return librange:UnitIn10ydSpellRange(unit)
+  if not _G.UnitXP then
+    return 0
+  else
+    local success, distance = pcall(_G.UnitXP, "distanceBetween", "player", unit)
+    return success and distance <= 10
+  end
 end
 
 -- [ RunOOC ]
