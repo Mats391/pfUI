@@ -580,6 +580,7 @@ function pfUI.uf:UpdateConfig()
   f.dispellable = nil
   f.indicators = nil
   f.indicator_custom = nil
+  f.isInRange = nil
 
   f.alpha_visible = tonumber(f.config.alpha_visible)
   f.alpha_outrange = tonumber(f.config.alpha_outrange)
@@ -784,11 +785,12 @@ function pfUI.uf:UpdateConfig()
   -- range fade: UnitInRange's answer comes as an event, a UnitXP threshold
   -- has none and is polled. With the 40y check off a frame fades by sight,
   -- which UNIT_DISTANCE_CHECK_UPDATE reports.
-  -- For LOS indicator polling is also needed
   local fade = f.config.faderange == "1" and C.unitframes.rangecheck == "1"
   local unitxp = C.unitframes.rangecheck_mode == "unitxp" and _G.UnitXP
   f.rangeevent = fade and not unitxp or nil
-  f.rangepoll = fade and (f.config.los_ind or unit.config.heal_ind_20yd or unit.config.heal_ind_10yd or (unitxp and true or nil))
+  f.rangepoll = fade and unitxp and true or nil
+  -- For LOS and heal indicator polling is needed for frames that are in range
+  f.inragepoll = not f.rangepoll and (f.config.los_ind or f.config.heal_ind_20yd or f.config.heal_ind_10yd)
 
   -- aggro:changed reaches only the frames that show aggro
   f.aggro = (f.config.squareaggro == "1" or f.config.glowaggro == "1") or nil
@@ -1180,7 +1182,8 @@ function pfUI.uf.OnUpdate()
   if this.label then
     -- what no event reports: a UnitXP range threshold, and the pet frames
     -- (created with a tick)
-    if this.rangepoll or this.tick then
+    local doRangePoll = this.rangepoll or this.inragepoll and (this.isInRange and true or nil) 
+    if doRangePoll or this.tick then
       -- Validate tick value - it should be an interval (e.g. 0.5), not a timestamp
       local tickInterval = this.tick
       if tickInterval and tickInterval > 10 then
@@ -1195,8 +1198,7 @@ function pfUI.uf.OnUpdate()
       if this.lastTick < now then
         local unitstr = this.label .. this.id
         this.lastTick = now + (tickInterval or .5)
-
-        if this.rangepoll then pfUI.uf:RefreshUnitState(this) end
+        if doRangePoll then pfUI.uf:RefreshUnitState(this) end
 
         -- A pet's full refresh rescans every aura and the portrait, so only
         -- do it when the unit behind the frame changes or once a second;
@@ -1862,7 +1864,8 @@ function pfUI.uf:RefreshUnitState(unit)
         SetBarValue(unit.hp.bar, 0)
         SetBarValue(unit.power.bar, 0)
       elseif unit.config.faderange == "1" then
-        if not pfUI.api.UnitInRange(unitstr) then
+        unit.isInRange = pfUI.api.UnitInRange(unitstr)
+        if not unit.isInRange then
             alpha = unit.alpha_outrange
             if unit.hp.bar.healIndicator then
                 unit.hp.bar.healIndicator:Hide()
