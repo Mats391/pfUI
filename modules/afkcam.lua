@@ -1,5 +1,4 @@
-pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
-  local MARKED_AFK_CAPTURE = SanitizePattern(MARKED_AFK_MESSAGE)
+pfUI:RegisterModule("afkcam", function ()
   local social_chats = {
     "CHAT_MSG_SAY",
     "CHAT_MSG_WHISPER",
@@ -17,40 +16,39 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
   overlay.top:SetPoint("TOPLEFT", overlay, "TOPLEFT")
   overlay.top:SetPoint("TOPRIGHT", overlay, "TOPRIGHT")
   overlay.top:SetHeight(100)
-  overlay.top:SetTexture(1,1,1,1)
+  overlay.top:SetColorTexture(1,1,1,1)
   overlay.top:SetGradientAlpha("VERTICAL", 0,0,0,0,  0,0,0,1)
 
   overlay.bottom = overlay:CreateTexture("pfAFKGradientTop", "BACKGROUND")
   overlay.bottom:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT")
   overlay.bottom:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT")
   overlay.bottom:SetHeight(100)
-  overlay.bottom:SetTexture(1,1,1,1)
+  overlay.bottom:SetColorTexture(1,1,1,1)
   overlay.bottom:SetGradientAlpha("VERTICAL", 0,0,0,1,  0,0,0,0)
 
   overlay:SetFrameStrata("DIALOG")
   overlay:SetAllPoints(WorldFrame)
 
-  overlay:SetScript("OnMouseUp",function()
-    SendChatMessage("","AFK")
-    this._parent:stop()
-  end)
+  -- /afk toggles, so send it only while AFK is still set: once the client
+  -- or the server has cleared it, /afk would set it again
+  local function Wake()
+    if IsChatAFK() then SendChatMessage("", "AFK") end
+    afkcam:stop()
+  end
+  overlay:SetScript("OnMouseUp", Wake)
   overlay:SetScript("OnShow", function()
     this:EnableKeyboard(true)
   end)
   overlay:SetScript("OnHide", function()
     this:EnableKeyboard(false)
   end)
-  overlay:SetScript("OnKeyUp",function()
-    SendChatMessage("","AFK")
-    this._parent:stop()
-  end)
+  overlay:SetScript("OnKeyUp", Wake)
   overlay:Hide()
 
   local chat = CreateFrame("ScrollingMessageFrame", "pfAFKCamChat", overlay)
   chat:EnableMouse(false)
   chat:EnableMouseWheel(true)
-  chat:SetHeight(150)
-  chat:SetWidth(500)
+  chat:SetSize(500, 150)
   chat:SetPoint("BOTTOMLEFT",overlay,"BOTTOMLEFT", 10, 10)
   chat:SetTimeVisible(1800.0)
   chat:SetMaxLines(500)
@@ -61,10 +59,13 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
     if not this:IsVisible() then return end
     local info = _G.ChatTypeInfo[string.gsub(event,"CHAT_MSG_","")]
     if not info then return end
-    local class = GetUnitData(arg2 or "")
+    -- the engine name-queries a chat sender before the event fires, so the
+    -- sender's GUID (arg12) always resolves
+    local _, class
+    if arg12 and arg12 ~= "" then _, class = GetPlayerInfoByGUID(arg12) end
     local author, msg
     if class and class ~= UNKNOWN then
-      local class_color = rgbhex(RAID_CLASS_COLORS[class])
+      local class_color = PFUI_CLASS_COLORS[class]:GenerateHexColorMarkup()
       author = string.format("%s%s|r",class_color,arg2)
     else
       author = arg2
@@ -76,15 +77,10 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
     chat:RegisterEvent(ctype)
   end
   chat:SetScript("OnMouseWheel",function()
-    if arg1 > 0 then
-      this:ScrollUp()
-    else
-      this:ScrollDown()
-    end
+    this:ScrollByAmount(arg1)
   end)
   overlay.chat = chat
 
-  overlay._parent = afkcam
   afkcam.overlay = overlay
 
   local clock = CreateFrame("Frame", "pfAFKClock", overlay)
@@ -94,31 +90,13 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
   clock.time:SetJustifyH("CENTER")
   clock.time:SetPoint("TOP", 0, -10)
   clock:SetScript("OnUpdate", function()
-    local h, m = GetGameTime()
-    local noon = "AM"
-    local time = ""
+    local fmt
     if C.global.twentyfour == "0" then
-      if C.global.servertime == "1" then
-        if h == 0 then
-          h = 12
-        elseif h == 12 then
-          noon = "PM"
-        elseif h > 12 then
-          h = h - 12
-          noon = "PM"
-        end
-        time = string.format("%.2d|cff33ffcc:|r%.2d %s", h, m, noon)
-      else
-        time = date("%I|cff33ffcc:|r%M %p")
-      end
-      clock.time:SetText(time)
+      fmt = "%I|cff33ffcc:|r%M %p"
     else
-      if C.global.servertime == "1" then
-        time = string.format("%.2d|cff33ffcc:|r%.2d", h, m)
-      else
-        time = date("%H|cff33ffcc:|r%M")
-      end
+      fmt = "%H|cff33ffcc:|r%M"
     end
+    local time = C.global.servertime == "1" and date(fmt, GetServerEpoch()) or date(fmt)
     clock.time:SetText(time)
   end)
 
@@ -169,9 +147,7 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
   delay:SetScript("OnUpdate", function()
     if ( this.tick or 0) > GetTime() then return else this.tick = GetTime() + 1 end
 
-    local name = UnitName("player")
-    local cast = pfGetCastInfo(name)
-    if not cast then cast = pfGetChannelInfo(name) end
+    local cast = C_Spell.UnitCastingInfo("player") or C_Spell.UnitChannelInfo("player")
     if not this.delay then this.delay = 0 end
 
     if cast then
@@ -185,12 +161,12 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
   end)
 
   afkcam:SetScript("OnEvent", function()
-    if event == "CHAT_MSG_SYSTEM" then
-      if (arg1 == _G.MARKED_AFK) or strfind(arg1, MARKED_AFK_CAPTURE) then
+    if event == "PLAYER_FLAGS_CHANGED" then
+      if UnitIsAFK('player') then
         delay:Show()
-      elseif (arg1 == _G.CLEARED_AFK) then
+      else
         delay:Hide()
-        this:stop()
+        if this._spinning then this:stop() end
       end
     else
       if this._spinning then
@@ -200,7 +176,7 @@ pfUI:RegisterModule("afkcam", "vanilla:tbc", function ()
     end
   end)
 
-  afkcam:RegisterEvent("CHAT_MSG_SYSTEM")
+  afkcam:RegisterEvent("PLAYER_FLAGS_CHANGED")
   afkcam:RegisterEvent("PLAYER_REGEN_DISABLED")
   afkcam:RegisterEvent("PLAYER_LEAVING_WORLD") -- reseting cvars on PLAYER_LOGOUT crashes the client ¯\_(ツ)_/¯
 end)

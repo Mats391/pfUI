@@ -1,10 +1,5 @@
-pfUI:RegisterNewModule("swingtimer", "Swing Timer")
-pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
+pfUI:RegisterModule("swingtimer", function ()
   local rawborder, border = GetBorderSize()
-
-  -- HitInfo flags (EVENTS.md)
-  local HITINFO_LEFTSWING  = 4      -- 4: Off-hand attack
-  local HITINFO_NOACTION   = 65536  -- 65536: server did not advance the swing clock
 
   -- SPELL_QUEUE_EVENT codes (EVENTS.md)
   local ON_SWING_QUEUED       = 0
@@ -20,63 +15,33 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     lastMhMarkerX = -1, lastOhMarkerX = -1, lastRaMarkerX = -1,
     autoAttackActive = false,
     inCombat = false,
-    pendingCastSpellId = nil,
-    mhFrozenAt = nil,
     hsQueued = false, cleaveQueued = false, maulQueued = false,
+    hsSeenCurrent = false, cleaveSeenCurrent = false, maulSeenCurrent = false,
     isWarrior = false,
     isDruid = false,
-    cachedHSSlots = {}, cachedCleaveSlots = {},
+    cachedHSSlots = {}, cachedCleaveSlots = {}, cachedMaulSlots = {},
     useSpellQueueEvent = false,
-    playerGUID = nil,
     swingThrottle = 0,
     onSwingCache = {},
+    outOfRange = {},  -- by Enum.PlayerSwingType
   }
 
-  -- Ranged spell IDs
-  local RANGED_SPELLIDS = {
-    [75]   = true,  -- Auto Shot (Hunter)
-    [2764] = true,  -- Throw (Warrior/Rogue)
-  }
+  local MAINHAND = Enum.PlayerSwingType.MainHand
+  local OFFHAND  = Enum.PlayerSwingType.OffHand
+  local RANGED   = Enum.PlayerSwingType.Ranged
 
-  -- Spells that DELAY the swing timer by their cast duration but do NOT reset it.
-  -- Slam: vanilla behavior on Turtle WoW - delays swing, does not reset.
-  -- Hammer of Wrath: Turtle WoW changed behavior - does not reset swing timer.
-  local swingDelaySpells = {
-    [1464] = true, [8820] = true, [11604] = true, [11605] = true,  -- Slam R1-R4
-    [24275] = true, [24274] = true, [24239] = true,                -- Hammer of Wrath R1-R3
-  }
-
-  -- SPELL_ATTR_ON_NEXT_SWING (bit 2, value 4): spell replaces next auto-attack swing.
+  -- On-next-swing spells replace the next auto-attack swing.
   -- Covers Raptor Strike, Maul, Mongoose Bite, Holy Strike, etc. automatically.
-  local ATTR_ON_NEXT_SWING = 4
   local function IsOnSwingSpell(spellId)
     if S.onSwingCache[spellId] ~= nil then return S.onSwingCache[spellId] end
-    local rec = GetSpellRec(spellId)
-    local result = rec and bit.band(rec.attributes, ATTR_ON_NEXT_SWING) ~= 0 or false
+    local result = C_Spell.IsNextMeleeSpell(spellId)
     S.onSwingCache[spellId] = result
     return result
   end
 
-  -- Heroic Strike spell IDs (all ranks)
-  local hsSpellIDs = {
-    [78] = true, [284] = true, [285] = true, [1608] = true,
-    [11564] = true, [11565] = true, [11566] = true, [11567] = true,
-  }
-
-  -- Cleave spell IDs (all ranks)
-  local cleaveSpellIDs = {
-    [845] = true, [7369] = true, [11608] = true, [11609] = true,
-    [20569] = true,
-    }
-
-  -- Maul spell IDs (all ranks 1 to 7)
-    local maulSpellIDs  = {
-        [6807] = true,
-        [6808] = true,
-        [6809] = true,
-        [8972] = true,
-     [9745] = true, [9880] = true, [9881] = true,
-    }
+  -- HS / Cleave / Maul are detected dynamically via IsOnSwingSpell (the
+  -- SPELL_ATTR_ON_NEXT_SWING bit) + name comparison against the rank-1
+  -- canonical names cached below — no per-rank ID maintenance.
 
   -- Read config
   local sw_width     = tonumber(C.unitframes.swingtimerwidth) or 200
@@ -103,7 +68,8 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
   local ohR, ohG, ohB, ohA = ParseColor(C.unitframes.swingtimerohcolor, 0.3, 0.8, 0.3, 1)
   local raR, raG, raB, raA = ParseColor(C.unitframes.swingtimerrangedcolor, 0.3, 0.6, 1.0, 1)
   local rwR, rwG, rwB, rwA = ParseColor(C.unitframes.swingtimerrangedwarncolor, 0.9, 0.0, 0.0, 1)
-  local isHunter = UnitClass("player") == "Hunter"
+  local orR, orG, orB = ParseColor(C.unitframes.swingtimeroutrangecolor, 0.5, 0.5, 0.5, 1)
+  local isHunter = UnitClassBase("player") == "HUNTER"
   local mhDefaultR, mhDefaultG, mhDefaultB = mhR, mhG, mhB
 
 
@@ -148,14 +114,14 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
 
 
   pfUI.swingtimer.mainhand.marker = pfUI.swingtimer.mainhand:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.mainhand.marker:SetTexture(1, 1, 1, 1.0)
+  pfUI.swingtimer.mainhand.marker:SetColorTexture(1, 1, 1, 1.0)
   pfUI.swingtimer.mainhand.marker:SetWidth(2)
   pfUI.swingtimer.mainhand.marker:SetHeight(sw_height)
   pfUI.swingtimer.mainhand.marker:Hide()
 
   -- Left glow: fades from transparent to white (right edge = marker)
   pfUI.swingtimer.mainhand.markerGlowL = pfUI.swingtimer.mainhand:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.mainhand.markerGlowL:SetTexture(1, 1, 1, 1)
+  pfUI.swingtimer.mainhand.markerGlowL:SetColorTexture(1, 1, 1, 1)
   pfUI.swingtimer.mainhand.markerGlowL:SetGradientAlpha("HORIZONTAL", 1, 1, 1, 0, 1, 1, 1, 0.35)
   pfUI.swingtimer.mainhand.markerGlowL:SetWidth(10)
   pfUI.swingtimer.mainhand.markerGlowL:SetHeight(sw_height)
@@ -163,7 +129,7 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
 
   -- Right glow: fades from white to transparent (left edge = marker)
   pfUI.swingtimer.mainhand.markerGlowR = pfUI.swingtimer.mainhand:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.mainhand.markerGlowR:SetTexture(1, 1, 1, 1)
+  pfUI.swingtimer.mainhand.markerGlowR:SetColorTexture(1, 1, 1, 1)
   pfUI.swingtimer.mainhand.markerGlowR:SetGradientAlpha("HORIZONTAL", 1, 1, 1, 0.35, 1, 1, 1, 0)
   pfUI.swingtimer.mainhand.markerGlowR:SetWidth(10)
   pfUI.swingtimer.mainhand.markerGlowR:SetHeight(sw_height)
@@ -206,14 +172,14 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
 
 
   pfUI.swingtimer.offhand.marker = pfUI.swingtimer.offhand:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.offhand.marker:SetTexture(1, 1, 1, 1.0)
+  pfUI.swingtimer.offhand.marker:SetColorTexture(1, 1, 1, 1.0)
   pfUI.swingtimer.offhand.marker:SetWidth(2)
   pfUI.swingtimer.offhand.marker:SetHeight(sw_height)
   pfUI.swingtimer.offhand.marker:Hide()
 
   -- Left glow: fades from transparent to white (right edge = marker)
   pfUI.swingtimer.offhand.markerGlowL = pfUI.swingtimer.offhand:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.offhand.markerGlowL:SetTexture(1, 1, 1, 1)
+  pfUI.swingtimer.offhand.markerGlowL:SetColorTexture(1, 1, 1, 1)
   pfUI.swingtimer.offhand.markerGlowL:SetGradientAlpha("HORIZONTAL", 1, 1, 1, 0, 1, 1, 1, 0.35)
   pfUI.swingtimer.offhand.markerGlowL:SetWidth(10)
   pfUI.swingtimer.offhand.markerGlowL:SetHeight(sw_height)
@@ -221,7 +187,7 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
 
   -- Right glow: fades from white to transparent (left edge = marker)
   pfUI.swingtimer.offhand.markerGlowR = pfUI.swingtimer.offhand:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.offhand.markerGlowR:SetTexture(1, 1, 1, 1)
+  pfUI.swingtimer.offhand.markerGlowR:SetColorTexture(1, 1, 1, 1)
   pfUI.swingtimer.offhand.markerGlowR:SetGradientAlpha("HORIZONTAL", 1, 1, 1, 0.35, 1, 1, 1, 0)
   pfUI.swingtimer.offhand.markerGlowR:SetWidth(10)
   pfUI.swingtimer.offhand.markerGlowR:SetHeight(sw_height)
@@ -230,35 +196,18 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
   CreateBackdropShadow(pfUI.swingtimer.offhand)
 
   -- Ranged bar
-  pfUI.swingtimer.ranged = CreateFrame("Frame", "pfSwingTimerRanged", UIParent)
+  -- Hunters fill from the center: the bar drains toward the middle during
+  -- the reload, then the auto shot deadzone grows back out in the warn color.
+  pfUI.swingtimer.ranged = CreateFrame("StatusBar", "pfSwingTimerRanged", UIParent)
   pfUI.swingtimer.ranged:SetPoint("BOTTOM", UIParent, "CENTER", -189, 83)
   pfUI.swingtimer.ranged:SetWidth(sw_width)
   pfUI.swingtimer.ranged:SetHeight(sw_height)
+  pfUI.swingtimer.ranged:SetMinMaxValues(0, 1)
+  pfUI.swingtimer.ranged:SetValue(0)
+  pfUI.swingtimer.ranged:SetStatusBarTexture(sw_texture)
+  pfUI.swingtimer.ranged:SetStatusBarColor(raR, raG, raB, raA)
+  pfUI.swingtimer.ranged:SetFillStyle(isHunter and "CENTER" or "STANDARD")
   pfUI.swingtimer.ranged:Hide()
-
-  pfUI.swingtimer.ranged.left = pfUI.swingtimer.ranged:CreateTexture(nil, "ARTWORK")
-  pfUI.swingtimer.ranged.left:SetTexture(sw_texture)
-  pfUI.swingtimer.ranged.left:SetPoint("RIGHT", pfUI.swingtimer.ranged, "CENTER", 0, 0)
-  pfUI.swingtimer.ranged.left:SetHeight(sw_height)
-  pfUI.swingtimer.ranged.left:SetWidth(sw_width / 2)
-  pfUI.swingtimer.ranged.left:SetTexCoord(0, 0.5, 0, 1)
-  pfUI.swingtimer.ranged.left:SetVertexColor(raR, raG, raB, raA)
-
-  pfUI.swingtimer.ranged.right = pfUI.swingtimer.ranged:CreateTexture(nil, "ARTWORK")
-  pfUI.swingtimer.ranged.right:SetTexture(sw_texture)
-  pfUI.swingtimer.ranged.right:SetPoint("LEFT", pfUI.swingtimer.ranged, "CENTER", 0, 0)
-  pfUI.swingtimer.ranged.right:SetHeight(sw_height)
-  pfUI.swingtimer.ranged.right:SetWidth(sw_width / 2)
-  pfUI.swingtimer.ranged.right:SetTexCoord(0.5, 1, 0, 1)
-  pfUI.swingtimer.ranged.right:SetVertexColor(raR, raG, raB, raA)
-
-  pfUI.swingtimer.ranged.warn = pfUI.swingtimer.ranged:CreateTexture(nil, "ARTWORK")
-  pfUI.swingtimer.ranged.warn:SetTexture(sw_texture)
-  pfUI.swingtimer.ranged.warn:SetPoint("CENTER", pfUI.swingtimer.ranged, "CENTER", 0, 0)
-  pfUI.swingtimer.ranged.warn:SetHeight(sw_height)
-  pfUI.swingtimer.ranged.warn:SetWidth(1)
-  pfUI.swingtimer.ranged.warn:SetVertexColor(rwR, rwG, rwB, rwA)
-  pfUI.swingtimer.ranged.warn:Hide()
 
   pfUI.swingtimer.ranged.text = pfUI.swingtimer.ranged:CreateFontString("Status", "DIALOG", "GameFontNormal")
   pfUI.swingtimer.ranged.text:SetPoint("CENTER", pfUI.swingtimer.ranged, "CENTER", 0, 0)
@@ -284,14 +233,14 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
 
 
   pfUI.swingtimer.ranged.marker = pfUI.swingtimer.ranged:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.ranged.marker:SetTexture(1, 1, 1, 1.0)
+  pfUI.swingtimer.ranged.marker:SetColorTexture(1, 1, 1, 1.0)
   pfUI.swingtimer.ranged.marker:SetWidth(2)
   pfUI.swingtimer.ranged.marker:SetHeight(sw_height)
   pfUI.swingtimer.ranged.marker:Hide()
 
   -- Left glow: fades from transparent to white (right edge = marker)
   pfUI.swingtimer.ranged.markerGlowL = pfUI.swingtimer.ranged:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.ranged.markerGlowL:SetTexture(1, 1, 1, 1)
+  pfUI.swingtimer.ranged.markerGlowL:SetColorTexture(1, 1, 1, 1)
   pfUI.swingtimer.ranged.markerGlowL:SetGradientAlpha("HORIZONTAL", 1, 1, 1, 0, 1, 1, 1, 0.35)
   pfUI.swingtimer.ranged.markerGlowL:SetWidth(10)
   pfUI.swingtimer.ranged.markerGlowL:SetHeight(sw_height)
@@ -299,7 +248,7 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
 
   -- Right glow: fades from white to transparent (left edge = marker)
   pfUI.swingtimer.ranged.markerGlowR = pfUI.swingtimer.ranged:CreateTexture(nil, "OVERLAY")
-  pfUI.swingtimer.ranged.markerGlowR:SetTexture(1, 1, 1, 1)
+  pfUI.swingtimer.ranged.markerGlowR:SetColorTexture(1, 1, 1, 1)
   pfUI.swingtimer.ranged.markerGlowR:SetGradientAlpha("HORIZONTAL", 1, 1, 1, 0.35, 1, 1, 1, 0)
   pfUI.swingtimer.ranged.markerGlowR:SetWidth(10)
   pfUI.swingtimer.ranged.markerGlowR:SetHeight(sw_height)
@@ -311,16 +260,12 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
   UpdateMovable(pfUI.swingtimer.ranged)
 
   -- OH weapon detection
-  local OH_WEAPON_TYPES = { [13]=true, [21]=true }
+  -- OH weapon detection: slot 17 (off hand) accepts one-hand (13) and off-hand
+  -- weapons (22); main-hand-only (21) can never sit there.
+  local OH_WEAPON_TYPES = { [13]=true, [22]=true }
   local function HasOffhandWeapon()
-    local l = GetInventoryItemLink("player", 17)
-    if not l then return false end
-    local _, _, id = string.find(l, "item:(%d+)")
-    id = tonumber(id)
-    if not id then return false end
-    local s = GetItemStats and GetItemStats(id)
-    if not s then return false end
-    return OH_WEAPON_TYPES[s.inventoryType] == true
+    local invType = C_Item.GetItemInventoryType({ equipmentSlotIndex = INVSLOT_OFFHAND })
+    return OH_WEAPON_TYPES[invType] == true
   end
 
   local function UpdateWeaponSpeeds()
@@ -331,64 +276,41 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     S.raSpeed = (rs and rs > 0) and rs or 0
   end
 
-  -- Reset MH countdown to full speed (server confirmed swing)
-  local function ResetMH()
-    if S.mhFrozenAt then
-      S.mhFrozenAt = nil
-    end
+  -- Start* restart a countdown from a PLAYER_SWING reset. `remaining` can be
+  -- shorter than the weapon speed (parry haste, ranged wind-up), so the bar
+  -- length stays the full swing and the fill starts part-way along.
+  local function StartMH(remaining)
     UpdateWeaponSpeeds()
     pfUI.swingtimer.mhGraceAt = nil  -- cancel any pending hide
-    S.mhTimerMax = S.mhSpeed
-    S.mhTimer    = S.mhSpeed
+    S.mhTimerMax = math.max(S.mhSpeed, remaining)
+    S.mhTimer    = remaining
     S.mhActive   = true
     pfUI.swingtimer.mainhand:Show()
     pfUI.swingtimer:Show()
   end
 
-  -- Reset OH countdown to full speed
-  local function ResetOH()
+  local function StartOH(remaining)
     UpdateWeaponSpeeds()
+    -- The off-hand attack time stays set with a shield equipped
     if S.ohSpeed <= 0 then return end
     pfUI.swingtimer.ohGraceAt = nil  -- cancel any pending hide
-    S.ohTimerMax = S.ohSpeed
-    S.ohTimer    = S.ohSpeed
+    S.ohTimerMax = math.max(S.ohSpeed, remaining)
+    S.ohTimer    = remaining
     S.ohActive   = true
     if sw_showoh then pfUI.swingtimer.offhand:Show() end
     pfUI.swingtimer:Show()
   end
 
-  -- Reset ranged countdown
-  local function ResetRanged()
+  local function StartRanged(remaining)
     if not sw_showranged then return end
     UpdateWeaponSpeeds()
     if S.raSpeed <= 0 then return end
-    -- Ranged replaces MH bar
-    S.mhActive = false
-    pfUI.swingtimer.mainhand:Hide()
-    S.raTimerMax = S.raSpeed
-    S.raTimer    = S.raSpeed
+    S.raTimerMax = math.max(S.raSpeed, remaining)
+    S.raTimer    = remaining
     S.raActive   = true
 
-    if isHunter then
-      pfUI.swingtimer.ranged.left:ClearAllPoints()
-      pfUI.swingtimer.ranged.left:SetPoint("RIGHT", pfUI.swingtimer.ranged, "CENTER", 0, 0)
-      pfUI.swingtimer.ranged.left:SetWidth(sw_width / 2)
-      pfUI.swingtimer.ranged.left:SetTexCoord(0, 0.5, 0, 1)
-      pfUI.swingtimer.ranged.right:SetWidth(sw_width / 2)
-      pfUI.swingtimer.ranged.right:SetTexCoord(0.5, 1, 0, 1)
-    else
-      pfUI.swingtimer.ranged.left:ClearAllPoints()
-      pfUI.swingtimer.ranged.left:SetPoint("TOPLEFT", pfUI.swingtimer.ranged, "TOPLEFT", 0, 0)
-      pfUI.swingtimer.ranged.left:SetWidth(0.1)
-      pfUI.swingtimer.ranged.left:Hide()
-      pfUI.swingtimer.ranged.left:SetTexCoord(0, 0, 0, 1)
-      pfUI.swingtimer.ranged.right:SetWidth(0.1)
-      pfUI.swingtimer.ranged.right:Hide()
-    end
-    pfUI.swingtimer.ranged.left:SetVertexColor(raR, raG, raB, raA)
-    pfUI.swingtimer.ranged.right:SetVertexColor(raR, raG, raB, raA)
-    pfUI.swingtimer.ranged.warn:SetWidth(1)
-    pfUI.swingtimer.ranged.warn:Hide()
+    pfUI.swingtimer.ranged:SetStatusBarColor(raR, raG, raB, raA)
+    pfUI.swingtimer.ranged:SetValue(isHunter and 1 or 0)
     pfUI.swingtimer.ranged:Show()
     pfUI.swingtimer:Show()
   end
@@ -408,28 +330,57 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     pfUI.swingtimer:Hide()
   end
 
-  -- HS/Cleave helpers
+  -- HS/Cleave/Maul helpers. Canonical rank-1 spellIDs resolve to the
+  -- localized spell name once, so per-spell classification is rank- and
+  -- locale-independent without per-rank ID hardcoding (every rank of
+  -- Heroic Strike etc. returns the same name).
+  local HS_NAME     = C_Spell.GetSpellName(78)    -- Heroic Strike (Rank 1)
+  local CLEAVE_NAME = C_Spell.GetSpellName(845)   -- Cleave (Rank 1)
+  local MAUL_NAME   = C_Spell.GetSpellName(6807)  -- Maul (Rank 1)
+
+  -- Classify an on-next-swing spell as "hs" / "cleave" / "maul" / nil.
+  -- IsOnSwingSpell gates the family (ATTR_ON_NEXT_SWING bit 0x04) so
+  -- unrelated spells return nil cheaply.
+  local function ClassifyOnSwingSpell(spellId)
+    if not IsOnSwingSpell(spellId) then return nil end
+    local name = C_Spell.GetSpellName(spellId)
+    if name == HS_NAME then return "hs"
+    elseif name == CLEAVE_NAME then return "cleave"
+    elseif name == MAUL_NAME then return "maul"
+    end
+  end
+
+  -- Set the queue flags from a ClassifyOnSwingSpell result. nil = no-op
+  -- (preserves prior flag state when the queued spell isn't one we
+  -- color-code, matching the legacy table-lookup behavior).
+  local function SetQueuedKind(kind)
+    if not kind then return end
+    S.hsQueued     = (kind == "hs")
+    S.cleaveQueued = (kind == "cleave")
+    S.maulQueued   = (kind == "maul")
+    S.hsSeenCurrent, S.cleaveSeenCurrent, S.maulSeenCurrent = false, false, false
+  end
+
   local function RebuildQueueSlotCache()
-    if not S.isWarrior or not sw_hsqueue or S.useSpellQueueEvent then return end
+    if not sw_hsqueue then return end
     S.cachedHSSlots     = {}
     S.cachedCleaveSlots = {}
+    S.cachedMaulSlots   = {}
+    if not (S.isWarrior or S.isDruid) then return end
     for slot = 1, 120 do
-      local tex  = GetActionTexture(slot)
-      local name = GetActionText(slot)
-      if tex then
-        if string.find(tex, "Ability_Rogue_Ambush") then
-          table.insert(S.cachedHSSlots, slot)
-        elseif string.find(tex, "Ability_Warrior_Cleave") then
-          table.insert(S.cachedCleaveSlots, slot)
-        end
+      local kind, id = GetActionInfo(slot)
+      local name
+      if kind == "spell" then
+        name = C_Spell.GetSpellName(id)
+      elseif kind == "macro" then
+        name = GetMacroSpell(id)
       end
-      if name then
-        local lower = string.lower(name)
-        if lower == "heroic strike" or lower == "heroicstrike" or lower == "hs" then
-          table.insert(S.cachedHSSlots, slot)
-        elseif lower == "cleave" then
-          table.insert(S.cachedCleaveSlots, slot)
-        end
+      if name == HS_NAME then
+        table.insert(S.cachedHSSlots, slot)
+      elseif name == CLEAVE_NAME then
+        table.insert(S.cachedCleaveSlots, slot)
+      elseif name == MAUL_NAME then
+        table.insert(S.cachedMaulSlots, slot)
       end
     end
   end
@@ -441,9 +392,30 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     return false
   end
 
+  -- Reconcile a stale event-driven queue flag against the client's current
+  -- action. Not every de-queue emits a SPELL_QUEUE pop — pressing Esc or
+  -- re-pressing to cancel an on-swing spell doesn't — so the flag alone stays
+  -- set. IsCurrentAction, which the client clears on cancel, is the reconciling
+  -- signal, but only after it has confirmed the ability as current at least once
+  -- (`seen`): a nampower-initiated cast may never flip IsCurrentAction, and must
+  -- keep its color until its own pop/resolve rather than be cleared early.
+  -- Returns the updated (queued, seen).
+  local function ReconcileQueued(queued, slots, seen)
+    if not queued then return false, false end
+    if CheckQueuedAction(slots) then return true, true end
+    if seen then return false, false end  -- was current, now gone -> cancelled
+    return true, false                    -- never confirmed current -> keep
+  end
+
   local function IsHSOrCleaveQueued()
     if not sw_hsqueue or not S.isWarrior then return false, false end
-    if S.useSpellQueueEvent then return S.hsQueued, S.cleaveQueued end
+    if S.useSpellQueueEvent then
+      S.hsQueued, S.hsSeenCurrent =
+        ReconcileQueued(S.hsQueued, S.cachedHSSlots, S.hsSeenCurrent)
+      S.cleaveQueued, S.cleaveSeenCurrent =
+        ReconcileQueued(S.cleaveQueued, S.cachedCleaveSlots, S.cleaveSeenCurrent)
+      return S.hsQueued, S.cleaveQueued
+    end
     return CheckQueuedAction(S.cachedHSSlots), CheckQueuedAction(S.cachedCleaveSlots)
   end
 
@@ -460,23 +432,17 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     local anyActive = false
 
     -- Tick timers down. When a timer expires we give a short grace period before
-    -- hiding the bar, to bridge the 1-2 frame gap until AUTO_ATTACK_SELF arrives.
-    -- If AUTO_ATTACK_SELF arrives during the grace period it resets the timer
+    -- hiding the bar, to bridge the 1-2 frame gap until PLAYER_SWING arrives.
+    -- If PLAYER_SWING arrives during the grace period it resets the timer
     -- normally and the grace timer is cleared. If not (e.g. auto-attack was
     -- turned off), the bar hides after the grace period ends.
     local GRACE = 0.15  -- seconds to wait after timer hits 0 before hiding
 
     if S.mhActive then
-      -- Don't tick while frozen (swing-delay spell like Slam is being cast)
-      if not S.mhFrozenAt then
-        S.mhTimer = S.mhTimer - delta
-      end
+      S.mhTimer = S.mhTimer - delta
       if S.mhTimer <= 0 then
         S.mhTimer = 0
-        if S.mhFrozenAt then
-          -- Swing-delay spell cast in progress: bar holds at 0, skip grace/hide.
-          -- SPELL_GO handler will unfreeze and add cast duration to timer.
-        elseif not pfUI.swingtimer.mhGraceAt then
+        if not pfUI.swingtimer.mhGraceAt then
           pfUI.swingtimer.mhGraceAt = GetTime() + GRACE
         elseif GetTime() >= pfUI.swingtimer.mhGraceAt then
           pfUI.swingtimer.mhGraceAt = nil
@@ -522,6 +488,10 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     -- HS/Cleave color
     local curR, curG, curB = mhDefaultR, mhDefaultG, mhDefaultB
     if sw_hsqueue then
+      if S.isDruid and S.useSpellQueueEvent then
+        S.maulQueued, S.maulSeenCurrent =
+          ReconcileQueued(S.maulQueued, S.cachedMaulSlots, S.maulSeenCurrent)
+      end
       if S.maulQueued and S.isDruid then
         curR, curG, curB = 1.0, 0.55, 0.0 -- orange for druid maul queue
       elseif S.isWarrior then
@@ -535,6 +505,10 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     end
 
     -- Render MH
+    if S.outOfRange[MAINHAND] then
+      curR, curG, curB = orR, orG, orB
+    end
+
     if S.mhActive then
       local progress = 1 - (S.mhTimer / S.mhTimerMax)
       pfUI.swingtimer.mainhand:SetValue(progress)
@@ -562,10 +536,10 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
       end
       pfUI.swingtimer.mainhand:SetStatusBarColor(curR, curG, curB, mhA)
       if sw_showtext then
-        pfUI.swingtimer.mainhand.text:SetText(string.format("%.1f", math.floor(S.mhTimer * 10) / 10))
+        pfUI.swingtimer.mainhand.text:SetFormattedText("%.1f", math.floor(S.mhTimer * 10) / 10)
       end
       if sw_showspeed and S.mhSpeed > 0 then
-        pfUI.swingtimer.mainhand.speed:SetText(string.format("%.2f", S.mhSpeed))
+        pfUI.swingtimer.mainhand.speed:SetFormattedText("%.2f", S.mhSpeed)
       end
       anyActive = true
     end
@@ -574,6 +548,11 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     if sw_showoh and S.ohActive then
       local progress = 1 - (S.ohTimer / S.ohTimerMax)
       pfUI.swingtimer.offhand:SetValue(progress)
+      if S.outOfRange[OFFHAND] then
+        pfUI.swingtimer.offhand:SetStatusBarColor(orR, orG, orB, ohA)
+      else
+        pfUI.swingtimer.offhand:SetStatusBarColor(ohR, ohG, ohB, ohA)
+      end
       if S.ohTimer <= 0 then
         if S.lastOhMarkerX ~= -1 then
           S.lastOhMarkerX = -1
@@ -596,10 +575,10 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
         end
       end
       if sw_showtext then
-        pfUI.swingtimer.offhand.text:SetText(string.format("%.1f", math.floor(S.ohTimer * 10) / 10))
+        pfUI.swingtimer.offhand.text:SetFormattedText("%.1f", math.floor(S.ohTimer * 10) / 10)
       end
       if sw_showspeed and S.ohSpeed > 0 then
-        pfUI.swingtimer.offhand.speed:SetText(string.format("%.2f", S.ohSpeed))
+        pfUI.swingtimer.offhand.speed:SetFormattedText("%.2f", S.ohSpeed)
       end
       anyActive = true
     elseif not sw_showoh then
@@ -609,55 +588,34 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     -- Render Ranged
     if sw_showranged and S.raActive then
       local remaining = S.raTimer
+      local r, g, b, a = raR, raG, raB, raA
       if isHunter then
         local DEADZONE = 0.5
-        local halfW = sw_width / 2
         if remaining > DEADZONE then
-          local elapsed   = S.raTimerMax - remaining
-          local phase1dur = S.raTimerMax - DEADZONE
-          local p = elapsed / phase1dur
-          local w = halfW * (1 - p)
-          if w < 1 then w = 1 end
-          pfUI.swingtimer.ranged.left:Show()
-          pfUI.swingtimer.ranged.left:SetWidth(w)
-          pfUI.swingtimer.ranged.left:SetTexCoord(0, (1 - p) * 0.5, 0, 1)
-          pfUI.swingtimer.ranged.left:SetVertexColor(raR, raG, raB, raA)
-          pfUI.swingtimer.ranged.right:Show()
-          pfUI.swingtimer.ranged.right:SetWidth(w)
-          pfUI.swingtimer.ranged.right:SetTexCoord(1 - (1 - p) * 0.5, 1, 0, 1)
-          pfUI.swingtimer.ranged.right:SetVertexColor(raR, raG, raB, raA)
-          pfUI.swingtimer.ranged.warn:Hide()
+          pfUI.swingtimer.ranged:SetValue((remaining - DEADZONE) / (S.raTimerMax - DEADZONE))
         else
-          local p = 1 - (remaining / DEADZONE)
-          local w = sw_width * p
-          if w < 1 then w = 1 end
-          pfUI.swingtimer.ranged.left:Hide()
-          pfUI.swingtimer.ranged.right:Hide()
-          pfUI.swingtimer.ranged.warn:SetWidth(w)
-          pfUI.swingtimer.ranged.warn:Show()
+          r, g, b, a = rwR, rwG, rwB, rwA
+          pfUI.swingtimer.ranged:SetValue(1 - (remaining / DEADZONE))
         end
         if sw_showtext then
           if remaining <= 0.5 then
-            pfUI.swingtimer.ranged.text:SetText(string.format("%.1f", math.floor(remaining * 10) / 10))
+            pfUI.swingtimer.ranged.text:SetFormattedText("%.1f", math.floor(remaining * 10) / 10)
           else
-            pfUI.swingtimer.ranged.text:SetText(string.format("%.1f", math.floor((remaining - 0.5) * 10) / 10))
+            pfUI.swingtimer.ranged.text:SetFormattedText("%.1f", math.floor((remaining - 0.5) * 10) / 10)
           end
         end
       else
-        local progress = 1 - (remaining / S.raTimerMax)
-        local w = sw_width * progress
-        if w < 1 then w = 1 end
-        pfUI.swingtimer.ranged.left:Show()
-        pfUI.swingtimer.ranged.left:SetWidth(w)
-        pfUI.swingtimer.ranged.left:SetTexCoord(0, progress, 0, 1)
-        pfUI.swingtimer.ranged.right:Hide()
-        pfUI.swingtimer.ranged.warn:Hide()
+        pfUI.swingtimer.ranged:SetValue(1 - (remaining / S.raTimerMax))
         if sw_showtext then
-          pfUI.swingtimer.ranged.text:SetText(string.format("%.1f", math.floor(remaining * 10) / 10))
+          pfUI.swingtimer.ranged.text:SetFormattedText("%.1f", math.floor(remaining * 10) / 10)
         end
       end
+      if S.outOfRange[RANGED] then
+        r, g, b = orR, orG, orB
+      end
+      pfUI.swingtimer.ranged:SetStatusBarColor(r, g, b, a)
       if sw_showspeed and S.raSpeed > 0 then
-        pfUI.swingtimer.ranged.speed:SetText(string.format("%.2f", S.raSpeed))
+        pfUI.swingtimer.ranged.speed:SetFormattedText("%.2f", S.raSpeed)
       end
       local raProgress = 1 - (S.raTimer / S.raTimerMax)
       local raMarkerX = raProgress * sw_width
@@ -692,156 +650,52 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     end
   end)
 
-  -- SPELL_START_SELF: fires only for cast-time spells, never instants
-  local spellStartFrame = CreateFrame("Frame")
-  spellStartFrame:RegisterEvent("SPELL_START_SELF")
-  spellStartFrame:SetScript("OnEvent", function()
-    if arg1 and arg1 > 0 then
-      S.pendingCastSpellId = arg1
-      -- Slam (and other delay-only spells): freeze the swing timer during cast
-      -- so it pauses instead of ticking down and expiring mid-cast
-      if swingDelaySpells[arg1] and S.mhActive then
-        S.mhFrozenAt = GetTime()
-      end
-    end
-  end)
-
-  -- Cast cancel/fail/interrupt: unfreeze swing timer if a delay spell was interrupted
-  local spellFailFrame = CreateFrame("Frame")
-  spellFailFrame:RegisterEvent("SPELLCAST_FAILED")
-  spellFailFrame:RegisterEvent("SPELLCAST_INTERRUPTED")
-  spellFailFrame:SetScript("OnEvent", function()
-    if S.mhFrozenAt then
-      S.mhFrozenAt = nil
-    end
-    S.pendingCastSpellId = nil
-  end)
-
-  -- SPELL_GO hook via libdebuff
-  pfUI.libdebuff_spell_go_hooks = pfUI.libdebuff_spell_go_hooks or {}
-  pfUI.libdebuff_spell_go_hooks["swingtimer"] = function(spellId)
-    if RANGED_SPELLIDS[spellId] then
-      ResetRanged()
-      return
-    elseif swingDelaySpells[spellId] then
-      -- Swing-delay spells (Slam, Hammer of Wrath on Turtle WoW):
-      -- Delay the swing timer by cast duration, do NOT reset it.
-      if S.mhFrozenAt then
-        local castDuration = GetTime() - S.mhFrozenAt
-        S.mhTimer = S.mhTimer + castDuration
-        S.mhTimerMax = S.mhTimerMax + castDuration
-        S.mhFrozenAt = nil
-      end
-      S.pendingCastSpellId = nil
-      return
-    elseif hsSpellIDs[spellId] or cleaveSpellIDs[spellId] or maulSpellIDs[spellId] or IsOnSwingSpell(spellId) then
-      S.hsQueued = false; S.cleaveQueued = false
-      S.maulQueued = false
-      ResetMH()
-    elseif cleaveSpellIDs[spellId] then
-      S.hsQueued = false; S.cleaveQueued = false
-      ResetMH()
-    else
-      -- Any spell with interruptFlags > 0 resets the swing timer
-      -- (Moonfire, Faerie Fire, Wrath, Starfire etc. - NOT Insect Swarm which has flags=0)
-      local _rec = GetSpellRec(spellId)
-      if _rec and _rec.interruptFlags and _rec.interruptFlags > 0 then
-        if S.mhActive and S.mhSpeed > 0 then
-          UpdateWeaponSpeeds()
-          S.mhTimerMax = S.mhSpeed
-          S.mhTimer    = S.mhSpeed
-        end
-      end
-    end
-    S.pendingCastSpellId = nil
-  end
-
-  -- SPELL_CAST_EVENT hook: HS/Cleave queue tracking
-  pfUI.libdebuff_spell_cast_hooks = pfUI.libdebuff_spell_cast_hooks or {}
-  pfUI.libdebuff_spell_cast_hooks["swingtimer"] = function(success, spellId)
-    if hsSpellIDs[spellId] then
-      S.hsQueued = true; S.cleaveQueued = false; S.maulQueued = false
-    elseif cleaveSpellIDs[spellId] then
-      S.cleaveQueued = true; S.hsQueued = false; S.maulQueued = false
-    elseif maulSpellIDs[spellId] then
-      S.maulQueued = true; S.hsQueued = false; S.cleaveQueued = false
-    end
-  end
-
-
   local events = CreateFrame("Frame")
-  events:RegisterEvent("AUTO_ATTACK_SELF")
-  events:RegisterEvent("AUTO_ATTACK_OTHER")
+  events:RegisterEvent("PLAYER_SWING")
+  events:RegisterEvent("PLAYER_SWING_RANGE_UPDATE")
   events:RegisterEvent("PLAYER_ENTERING_WORLD")
-  events:RegisterEvent("UNIT_INVENTORY_CHANGED")
+  events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")  -- ClassicAPI: per-slot, equipment-only
   events:RegisterEvent("PLAYER_REGEN_DISABLED")
   events:RegisterEvent("PLAYER_REGEN_ENABLED")
   events:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
-  events:RegisterEvent("UNIT_DIED")
+  events:RegisterEvent("PLAYER_DEAD")
+  events:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
+  events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
   events:RegisterEvent("SPELL_QUEUE_EVENT")
   events:RegisterEvent("START_AUTOATTACK")
   events:RegisterEvent("STOP_AUTOATTACK")
 
   events:SetScript("OnEvent", function()
-    if event == "AUTO_ATTACK_SELF" then
-      local hitInfo  = arg4 or 0
-      local isOffhand = bit.band(hitInfo, HITINFO_LEFTSWING) ~= 0
-      local noAction  = bit.band(hitInfo, HITINFO_NOACTION) ~= 0
-      -- NOACTION means server did not advance swing clock (dodge/parry/miss).
-      -- Only skip if the timer is already running - if it's not active yet
-      -- (first swing ever), we still want to start it so the bar appears.
-      if noAction then
-        if isOffhand and S.ohActive then return end
-        if not isOffhand and S.mhActive then return end
+    if event == "PLAYER_SWING" then
+      -- ClassicAPI tracks the server's swing clock (white hits, on-next-swing
+      -- abilities, swing-reset casts, parry haste, extra attacks, weapon
+      -- swaps) and hands over the seconds left until the next swing.
+      if arg2 == MAINHAND then
+        StartMH(arg1)
+      elseif arg2 == OFFHAND then
+        StartOH(arg1)
+      elseif arg2 == RANGED then
+        StartRanged(arg1)
       end
 
-      -- Extra attack detection: if timer still has >20% remaining for that hand,
-      -- the server did NOT reset the swing clock -> this is an extra attack, skip.
-      -- Use 20% here (SP_SwingTimer's ShouldResetTimer threshold).
-      -- Exception: if timer is already at 0 (expired), always accept.
-      if isOffhand then
-        local pct = S.ohActive and (S.ohTimer / S.ohTimerMax) or 0
-        if S.ohActive and S.ohTimer > 0 and pct > 0.20 then
-          return
-        end
-        ResetOH()
-      else
-        local pct = S.mhActive and (S.mhTimer / S.mhTimerMax) or 0
-        if S.mhActive and S.mhTimer > 0 and pct > 0.20 then
-          return
-        end
-        ResetMH()
+    elseif event == "PLAYER_SWING_RANGE_UPDATE" then
+      -- arg1 = swingType, arg2 = isInRange, arg3 = checksRange; no check
+      -- (no target, nothing to attack, no weapon) is not out of range
+      S.outOfRange[arg1] = arg3 and not arg2
+
+    elseif event == "UNIT_SPELLCAST_SENT" then
+      -- arg4 = spellID: an on-next-swing ability (HS / Cleave / Maul) queued
+      local kind = ClassifyOnSwingSpell(arg4)
+      if kind then
+        S.useSpellQueueEvent = true
+        SetQueuedKind(kind)
       end
 
-    elseif event == "AUTO_ATTACK_OTHER" then
-      -- Parry haste: enemy attacked the player and player parried
-      local targetGuid = arg2
-      if not targetGuid or not S.playerGUID then return end
-      if targetGuid ~= S.playerGUID then return end
-      local victimState = arg5 or 0
-      -- VICTIMSTATE_PARRY = 3
-      -- Vanilla: parry reduces the NEXT swing timer by 40% of weapon speed,
-      -- minimum 20% of weapon speed remaining (SP_SwingTimer approach)
-      if victimState == 3 then
-        -- Apply to whichever swing comes next (smallest % remaining = closest to firing)
-        if S.ohActive and S.ohSpeed > 0 and (S.ohTimer / S.ohTimerMax) < (S.mhTimer / S.mhTimerMax) then
-          local minimum = S.ohSpeed * 0.20
-          if S.ohTimer > minimum then
-            local reduct = S.ohSpeed * 0.40
-            local before = S.ohTimer
-            S.ohTimer = S.ohTimer - reduct
-            if S.ohTimer < minimum then S.ohTimer = minimum end
-          end
-        elseif S.mhActive and S.mhSpeed > 0 then
-          local minimum = S.mhSpeed * 0.20
-          if S.mhTimer > minimum then
-            local reduct = S.mhSpeed * 0.40
-            local before = S.mhTimer
-            S.mhTimer = S.mhTimer - reduct
-            if S.mhTimer < minimum then S.mhTimer = minimum end
-          end
-        else
-        end
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+      -- arg3 = spellID: the on-next-swing ability resolved, which consumes
+      -- the queue, so drop the queued color
+      if IsOnSwingSpell(arg3) then
+        S.hsQueued = false; S.cleaveQueued = false; S.maulQueued = false
       end
 
     elseif event == "SPELL_QUEUE_EVENT" then
@@ -849,13 +703,7 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
       local spellId   = arg2 or 0
       if eventCode == ON_SWING_QUEUED then
         S.useSpellQueueEvent = true
-        if hsSpellIDs[spellId] then
-          S.hsQueued = true; S.cleaveQueued = false; S.maulQueued = false
-        elseif cleaveSpellIDs[spellId] then
-          S.cleaveQueued = true; S.hsQueued = false; S.maulQueued = false
-        elseif maulSpellIDs[spellId] then
-          S.maulQueued = true; S.hsQueued = false; S.cleaveQueued = false
-        end
+        SetQueuedKind(ClassifyOnSwingSpell(spellId))
       elseif eventCode == ON_SWING_QUEUE_POPPED then
         S.hsQueued = false; S.cleaveQueued = false; S.maulQueued = false
       end
@@ -867,15 +715,15 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
       S.autoAttackActive = false
 
     elseif event == "PLAYER_ENTERING_WORLD" then
-      local _, class = UnitClass("player")
+      local class = UnitClassBase("player")
       S.isWarrior  = (class == "WARRIOR")
       S.isDruid    = (class == "DRUID")
-      S.playerGUID = GetUnitGUID("player")
       UpdateWeaponSpeeds()
       RebuildQueueSlotCache()
 
-    elseif event == "UNIT_INVENTORY_CHANGED" then
-      if arg1 and arg1 ~= "player" then return end
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
+      -- arg1 = changed slot; only weapon slots (main/off/ranged) affect swing speed
+      if not INVSLOTS_EQUIPABLE_IN_COMBAT[arg1] then return end
       UpdateWeaponSpeeds()
       if S.ohSpeed == 0 then
         S.ohActive = false
@@ -899,10 +747,8 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
       S.cleaveQueued = false
       S.maulQueued   = false
 
-    elseif event == "UNIT_DIED" then
-      if arg1 and arg1 == S.playerGUID then
-        ResetAll()
-      end
+    elseif event == "PLAYER_DEAD" then
+      ResetAll()
     end
   end)
 
@@ -947,6 +793,15 @@ pfUI:RegisterModule("swingtimer", "vanilla:tbc", function ()
     IsCleaveQueued    = function() return S.cleaveQueued end,
     IsMaulQueued      = function() return S.maulQueued end,
   }
+
+  -- the range event fires only on a change, so read the state once
+  local function EnableRangeCheck(swingType)
+    C_SwingTimer.EnableRangeCheck(swingType, true)
+    S.outOfRange[swingType] = C_SwingTimer.IsTargetWithinSwingRange(swingType) == false
+  end
+  EnableRangeCheck(MAINHAND)
+  if sw_showoh then EnableRangeCheck(OFFHAND) end
+  if sw_showranged then EnableRangeCheck(RANGED) end
 
   UpdateWeaponSpeeds()
 end)

@@ -1,7 +1,7 @@
-pfUI:RegisterSkin("Friends", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Friends", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
-  local maxtab = pfUI.expansion == "vanilla" and 4 or 5
+  local maxtab = 4
 
   StripTextures(FriendsFrame, true)
   CreateBackdrop(FriendsFrame, nil, nil, .75)
@@ -456,7 +456,7 @@ pfUI:RegisterSkin("Friends", "vanilla:tbc", function ()
     end
 
     -- all RaidFrame buttons are in Blizzard_RaidUI in Turtle WoW
-    HookAddonOrVariable("Blizzard_RaidUI", function()
+    HookAddon("Blizzard_RaidUI", function()
       if RaidFrameRaidInfoButton      then SkinButton(RaidFrameRaidInfoButton)      end
       if RaidFrameConvertToRaidButton then SkinButton(RaidFrameConvertToRaidButton) end
       if RaidFrameReadyCheckButton    then SkinButton(RaidFrameReadyCheckButton)    end

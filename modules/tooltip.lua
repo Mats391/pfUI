@@ -1,10 +1,9 @@
-pfUI:RegisterModule("tooltip", "vanilla", function ()
+pfUI:RegisterModule("tooltip", function ()
   local rawborder, default_border = GetBorderSize()
 
   pfUI.tooltip = CreateFrame('Frame', "pfTooltip", GameTooltip)
   pfUI.tooltip.anchorframe = CreateFrame('Frame', "pfTooltipAnchor", UIParent)
-  pfUI.tooltip.anchorframe:SetWidth(128)
-  pfUI.tooltip.anchorframe:SetHeight(72)
+  pfUI.tooltip.anchorframe:SetSize(128, 72)
   pfUI.tooltip.anchorframe:SetPoint("TOP", UIParent, "TOP", 0, -50)
   pfUI.tooltip.anchorframe:Hide()
   UpdateMovable(pfUI.tooltip.anchorframe)
@@ -24,65 +23,64 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
   end
 
   if C.tooltip.position == "cursor" then
+    -- Cursor mode makes the tooltip follow the mouse. The client has no
+    -- mouse-move event, so following means polling GetCursorPosition() via an
+    -- invisible follower frame that the tooltip anchors to. The follower is
+    -- only shown while a tooltip is visible -- an OnUpdate fires only while its
+    -- frame is shown, so the poll stops the moment the tooltip hides instead
+    -- of running forever.
+    local follower, Reposition
+    if C.tooltip.cursoralign ~= "native" then
+      local size = tonumber(C.tooltip.cursoroffset) * 2
+      follower = CreateFrame("Frame", nil, UIParent)
+      follower:SetSize(size, size)
+      follower:Hide()
+
+      Reposition = function()
+        local scale = UIParent:GetScale()
+        local x, y = GetCursorPosition()
+        follower:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x/scale, y/scale)
+        if C.tooltip.cursoralign == "top" then
+          follower:SetWidth(GameTooltip:GetWidth())
+        end
+      end
+
+      follower:SetScript("OnUpdate", function()
+        -- throttle - cursor following doesn't need to be every frame
+        if (this.tick or 0) > GetTime() then return end
+        this.tick = GetTime() + (pfUI.throttle and pfUI.throttle:Get("tooltip_cursor") or 0.1)
+        Reposition()
+      end)
+
+      -- stop polling as soon as the tooltip is gone
+      pfUI.tooltip:SetScript("OnHide", function() follower:Hide() end)
+    end
+
     function _G.GameTooltip_SetDefaultAnchor(tooltip, parent)
       tooltip:SetOwner(parent, "ANCHOR_CURSOR")
-      if C.tooltip.cursoralign ~= "native" then
-        -- create mouse follow frame
-        if not tooltip.cursor then
-          tooltip.cursor = CreateFrame("Frame", nil, UIParent)
-          tooltip.cursor:SetWidth(tonumber(C.tooltip.cursoroffset) * 2)
-          tooltip.cursor:SetHeight(tonumber(C.tooltip.cursoroffset) * 2)
-          tooltip.cursor:SetScript("OnUpdate", function()
-            -- throttle - cursor following doesn't need to be every frame
-            if (this.tick or 0) > GetTime() then return end
-            this.tick = GetTime() + (pfUI.throttle and pfUI.throttle:Get("tooltip_cursor") or 0.1)
+      if not follower then return end
 
-            local scale = UIParent:GetScale()
-            local x, y = GetCursorPosition()
-            this:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x/scale, y/scale)
-            if C.tooltip.cursoralign == "top" then
-              tooltip.cursor:SetWidth(tooltip:GetWidth())
-            end
-          end)
-        end
+      -- position the follower right away so the tooltip doesn't flash at a
+      -- stale spot before the first OnUpdate tick
+      follower:Show()
+      Reposition()
 
-        -- adjust tooltip to mouse frame
-        if C.tooltip.cursoralign == "top" then
-          tooltip:SetPoint("BOTTOMLEFT", tooltip.cursor, "TOPLEFT", 0, 0)
-        elseif C.tooltip.cursoralign == "left" then
-          tooltip:SetPoint("BOTTOMRIGHT", tooltip.cursor, "LEFT", 0, 0)
-        elseif C.tooltip.cursoralign == "right" then
-          tooltip:SetPoint("BOTTOMLEFT", tooltip.cursor, "RIGHT", 0, 0)
-        end
+      if C.tooltip.cursoralign == "top" then
+        tooltip:SetPoint("BOTTOMLEFT", follower, "TOPLEFT", 0, 0)
+      elseif C.tooltip.cursoralign == "left" then
+        tooltip:SetPoint("BOTTOMRIGHT", follower, "LEFT", 0, 0)
+      elseif C.tooltip.cursoralign == "right" then
+        tooltip:SetPoint("BOTTOMLEFT", follower, "RIGHT", 0, 0)
       end
     end
   end
 
-  local units = { "mouseover", "player", "pet", "target", "party", "partypet", "raid", "raidpet" }
   function pfUI.tooltip:GetUnit()
     pfUI.tooltip.unit = "none"
-
-    for i, unit in pairs(units) do
-      if unit == "party" or unit == "partypet" then
-        for i=1,4 do
-          if UnitExists(unit .. i) and ( UnitName(unit .. i) == GameTooltipTextLeft1:GetText() or UnitPVPName(unit .. i) == GameTooltipTextLeft1:GetText() ) then
-            pfUI.tooltip.unit = unit .. i
-            return pfUI.tooltip.unit
-          end
-        end
-      elseif unit == "raid" or unit == "raidpet" then
-        for i=1,40 do
-          if UnitExists(unit .. i) and ( UnitName(unit .. i) == GameTooltipTextLeft1:GetText() or UnitPVPName(unit .. i) == GameTooltipTextLeft1:GetText() ) then
-            pfUI.tooltip.unit = unit .. i
-            return pfUI.tooltip.unit
-          end
-        end
-      else
-        if UnitExists(unit) and ( UnitName(unit) == GameTooltipTextLeft1:GetText() or UnitPVPName(unit) == GameTooltipTextLeft1:GetText() ) then
-          pfUI.tooltip.unit = unit
-          return pfUI.tooltip.unit
-        end
-      end
+    if GameTooltip:HasUnit() then
+      local _, guid = GameTooltip:GetUnitGUID()
+      local token = guid and UnitTokenFromGUID(guid)
+      if token then pfUI.tooltip.unit = token end
     end
     return pfUI.tooltip.unit
   end
@@ -97,7 +95,16 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
 
   pfUI.tooltip:SetAllPoints()
   pfUI.tooltip:SetScript("OnShow", function()
-      pfUI.tooltip:Update()
+      if C.tooltip.itemid == "1" and GameTooltip:HasItem() then
+        local _, _, itemID = GameTooltip:GetItem()
+        GameTooltip:AddLine(T["ItemID"] .. ": " .. itemID, .25,.5,1)
+        GameTooltip:Show()
+      elseif C.tooltip.spellid == "1" and GameTooltip:HasSpell() then
+        local _, _, spellID = GameTooltip:GetSpell()
+        GameTooltip:AddLine(T["SpellID"] .. ": " .. spellID, .25,.5,1)
+        GameTooltip:Show()
+      end
+
       if GameTooltip:GetAnchorType() == "ANCHOR_NONE" then
         GameTooltip:ClearAllPoints()
         if C.tooltip.position == "bottom" then
@@ -165,20 +172,12 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
       rhp, rhpmax = hp, hpmax
     elseif pfUI.libhealth and pfUI.libhealth.enabled then
       rhp, rhpmax, estimated = pfUI.libhealth:GetUnitHealthByName(this.name, this.level, tonumber(hp), tonumber(hpmax))
-    elseif MobHealthFrame then
-      local index = (this.name or "") .. ":" .. (this.level or "")
-      local ppp = MobHealth_PPP(index)
-      if perc and ppp and ppp > 0 and not UnitIsUnit("mouseover", "pet") then
-        rhp = round(hp * ppp)
-        rhpmax = round(100 * ppp)
-        estimated = true
-      end
     end
 
     if C.tooltip.alwaysperc == "0" and ( estimated or hpmax > 100 or round(hpmax/100*hp) ~= hp ) then
-      pfUI.tooltipStatusBar.HP:SetText(string.format("%s / %s", Abbreviate(rhp), Abbreviate(rhpmax)))
+      pfUI.tooltipStatusBar.HP:SetFormattedText("%s / %s", Abbreviate(rhp), Abbreviate(rhpmax))
     elseif hpmax > 0 then
-      pfUI.tooltipStatusBar.HP:SetText(string.format("%s%%", ceil(hp/hpmax*100)))
+      pfUI.tooltipStatusBar.HP:SetFormattedText("%s%%", ceil(hp/hpmax*100))
     else
       pfUI.tooltipStatusBar.HP:SetText("")
     end
@@ -195,24 +194,124 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
   GameTooltipStatusBar.SetStatusBarColor_orig = GameTooltipStatusBar.SetStatusBarColor
   GameTooltipStatusBar.SetStatusBarColor = function() return end
 
-  function pfUI.tooltip:Update()
-      local unit = pfUI.tooltip:GetUnit()
-      if unit == "none" then
-        -- process item tooltips
-        if C.tooltip.itemid == "1" and libtooltip:GetItemID() then
-          GameTooltip:AddLine(T["ItemID"] .. ": " .. libtooltip:GetItemID(), .25,.5,1)
-          GameTooltip:Show()
-        end
+  -- A row of buff icons anchored above the tooltip for mouseover units.
+  -- Icons come from a ClassicAPI object pool: ReleaseAll hides the whole
+  -- set each refresh, then we Acquire and re-anchor left-to-right.
+  local BUFF_SIZE, BUFF_SPACING, BUFF_MAX = 20, 2, 32
+  local auraSlots = {}  -- reusable GetAuraSlots buffer for UpdateBuffs
+  pfUI.tooltip.buffs = CreateFrame("Frame", "pfTooltipBuffs", GameTooltip)
+  pfUI.tooltip.buffs:SetPoint("BOTTOMLEFT", GameTooltipStatusBar, "TOPLEFT", 0, default_border + 2)
+  pfUI.tooltip.buffs:SetHeight(BUFF_SIZE)
 
-        return
+  local function CreateBuffIcon()
+    local icon = CreateFrame("Frame", nil, pfUI.tooltip.buffs)
+    icon:SetSize(BUFF_SIZE, BUFF_SIZE)
+    icon.texture = icon:CreateTexture(nil, "BACKGROUND")
+    icon.texture:SetTexCoord(.07, .93, .07, .93)
+    icon.texture:SetAllPoints(icon)
+    CreateBackdrop(icon)
+
+    icon.stacks = icon:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    icon.stacks:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 1, 0)
+    icon.stacks:SetFont(C.tooltip.font_tooltip, C.tooltip.font_tooltip_size, "OUTLINE")
+    icon.stacks:SetTextColor(1, 1, 1, 1)
+
+    icon.cd = CreateCooldown(icon, "tooltip")
+    return icon
+  end
+
+  pfUI.tooltip.buffpool = CreateObjectPool(CreateBuffIcon, function(_, icon)
+    icon:Hide()
+    icon:ClearAllPoints()
+  end)
+
+  function pfUI.tooltip:UpdateBuffs(unit)
+    pfUI.tooltip.buffpool:ReleaseAll()
+
+    if C.tooltip.showbuffs ~= "1" or not unit or unit == "none" then
+      pfUI.tooltip.buffs:Hide()
+      return
+    end
+
+    local prev, count = nil, 0
+    -- one GetAuraSlots enumeration + positional by-slot reads: no per-aura
+    -- table and no per-index re-walk of the aura array
+    local n = ScanAuraSlots(unit, "HELPFUL", auraSlots, BUFF_MAX)
+    for i = 1, n do
+      local name, texture, applications, _, duration, expirationTime = C_UnitAuras.UnitAuraBySlot(unit, auraSlots[i])
+      if not name then break end
+
+      count = count + 1
+      local icon = pfUI.tooltip.buffpool:Acquire()
+      icon.texture:SetTexture(texture)
+      icon.stacks:SetText(applications and applications > 1 and applications or "")
+
+      local start, dur = GetAuraTimer(duration, expirationTime)
+      CooldownFrame_SetTimer(icon.cd, start, dur, dur > 0 and 1 or 0)
+
+      if prev then
+        icon:SetPoint("LEFT", prev, "RIGHT", BUFF_SPACING, 0)
+      else
+        icon:SetPoint("BOTTOMLEFT", pfUI.tooltip.buffs, "BOTTOMLEFT", 0, 0)
       end
+      icon:Show()
+      prev = icon
+    end
+
+    if count > 0 then
+      pfUI.tooltip.buffs:SetWidth(count * BUFF_SIZE + (count - 1) * BUFF_SPACING)
+      pfUI.tooltip.buffs:Show()
+    else
+      pfUI.tooltip.buffs:Hide()
+    end
+  end
+
+  -- A unit tooltip names the unit's target, so it rebuilds when that changes:
+  -- UNIT_TARGET by the unit's GUID, which unit events fire with whatever token
+  -- names the unit. SetUnit re-runs OnTooltipSetUnit and with it UpdateUnit.
+  -- It goes through the token the tooltip was built from -- "mouseover" for a
+  -- world unit stops naming it once the cursor leaves, so a fading tooltip is
+  -- left to fade -- and waits a frame: the rebuild re-points this frame's
+  -- registration, which the dispatch is still walking.
+  local function Retarget()
+    local _, unit = GameTooltip:GetUnit()
+    local _, guid = GameTooltip:GetUnitGUID()
+    if unit and GameTooltip:IsShown() and UnitGUID(unit) == guid then
+      GameTooltip:SetUnit(unit)
+    end
+  end
+
+  pfUI.tooltip.retarget = CreateFrame("Frame")
+  pfUI.tooltip.retarget:SetScript("OnEvent", function()
+    RunNextFrame(Retarget)
+  end)
+
+  -- pfUI's unit lines go on whenever a unit is set, not only when the tooltip
+  -- shows, so a tooltip rebuilt while it is up keeps them
+  GameTooltip:HookScript("OnTooltipSetUnit", function()
+    pfUI.tooltip:UpdateUnit()
+  end)
+
+  -- the buff row belongs to the unit it was built for
+  GameTooltip:HookScript("OnTooltipCleared", function()
+    pfUI.tooltip:UpdateBuffs("none")
+  end)
+
+  GameTooltip:HookScript("OnHide", function()
+    pfUI.tooltip:UpdateBuffs("none")
+    pfUI.tooltip.retarget:UnregisterEvent("UNIT_TARGET")
+  end)
+
+  function pfUI.tooltip:UpdateUnit()
+      local unit = pfUI.tooltip:GetUnit()
+      pfUI.tooltip:UpdateBuffs(unit)
+      if unit == "none" then return end
+      pfUI.tooltip.retarget:RegisterUnitEvent("UNIT_TARGET", UnitGUID(unit))
 
       local pvpname = UnitPVPName(unit)
       local name = UnitName(unit)
-      local target = UnitName(unit .. "target")
-      local _, targetClass = UnitClass(unit .. "target")
-      local targetReaction = UnitReaction("player",unit .. "target")
-      local _, class = UnitClass(unit)
+      local validTarget, target = pcall(UnitName, unit .. 'target')
+      local class = UnitClassBase(unit)
       local guild, rankstr, rankid = GetGuildInfo(unit)
       local reaction = UnitReaction(unit, "player")
       local pvptitle = gsub(gsub(pvpname or name, name, "", 1), "^%s*(.-)%s*$", "%1")
@@ -221,14 +320,10 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
 
       if name then
         if UnitIsPlayer(unit) and class then
-          local color = RAID_CLASS_COLORS[class]
-          GameTooltipStatusBar:SetStatusBarColor_orig(color.r, color.g, color.b)
-          GameTooltip:SetBackdropBorderColor(color.r, color.g, color.b)
-          if color and color.r then
-            GameTooltipTextLeft1:SetText(rgbhex(color.r, color.g, color.b, color.a) .. name)
-          else
-            GameTooltipTextLeft1:SetText("|cff999999" .. name)
-          end
+          local color = PFUI_CLASS_COLORS[class]
+          GameTooltipStatusBar:SetStatusBarColor_orig(color:GetRGB())
+          GameTooltip:SetBackdropBorderColor(color:GetRGB())
+          GameTooltipTextLeft1:SetText("|c" .. color.colorStr .. name)
         elseif reaction then
           local color = UnitReactionColor[reaction]
           GameTooltipStatusBar:SetStatusBarColor_orig(color.r, color.g, color.b)
@@ -250,9 +345,11 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
         GameTooltip:AddLine("<" .. guild .. ">" .. lead .. rank, 0.3, 1, 0.5)
       end
 
-      if target then
+      if validTarget and target then
+        local targetClass = UnitClassBase(unit .. "target")
+        local targetReaction = UnitReaction("player",unit .. "target")
         if UnitIsPlayer(unit .. "target") and targetClass then
-          local color = RAID_CLASS_COLORS[targetClass]
+          local color = PFUI_CLASS_COLORS[targetClass]
           GameTooltip:AddLine(target, color.r, color.g, color.b)
         elseif targetReaction then
           local color = UnitReactionColor[targetReaction]
@@ -264,6 +361,21 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
         end
       end
 
+      if C.tooltip.movespeed == "1" then
+        local currentSpeed = GetUnitSpeed(unit)
+        if currentSpeed and currentSpeed > 0 then
+          local pct = floor(currentSpeed / 7 * 100 + 0.5)
+          GameTooltip:AddLine(T["Speed"] .. ": " .. pct .. "%", 0.7, 0.7, 1)
+        end
+      end
+
+      if C.tooltip.unitid == "1" and not UnitIsPlayer(unit) then
+        local npcID = C_CreatureInfo.GetCreatureID(UnitGUID(unit))
+        if npcID then
+          GameTooltip:AddLine(T["UnitID"] .. ": " .. npcID, .25,.5,1)
+        end
+      end
+
       if hp and hpm then
         if hp >= 1000 then hp = round(hp / 1000, 1) .. "k" end
         if hpm >= 1000 then hpm = round(hpm / 1000, 1) .. "k" end
@@ -271,4 +383,33 @@ pfUI:RegisterModule("tooltip", "vanilla", function ()
       end
       GameTooltip:Show()
     end
+
+  if C.tooltip.aurasource == "1" or C.tooltip.spellid == "1" then
+    hooksecurefunc(GameTooltip, "SetUnitAura", function(self, ...)
+      local aura = C_UnitAuras.GetAuraDataByIndex(unpack(arg))
+      if not aura then return end
+      if C.tooltip.aurasource == "1" then
+        local caster = aura.sourceUnit and UnitName(aura.sourceUnit)
+        if not caster and aura.sourceGUID then
+          caster = UnitNameFromGUID(aura.sourceGUID)
+        end
+        if caster and caster ~= "" then
+          local classToken
+          if aura.sourceUnit and UnitIsPlayer(aura.sourceUnit) then
+            classToken = UnitClassBase(aura.sourceUnit)
+          elseif aura.sourceGUID then
+            classToken = select(2, GetPlayerInfoByGUID(aura.sourceGUID))
+          end
+          if classToken then
+            caster = PFUI_CLASS_COLORS[classToken]:WrapTextInColorCode(caster)
+          end
+          self:AddLine(T["Cast by"] .. ": " .. caster, .25,.5,1)
+        end
+      end
+      if C.tooltip.spellid == "1" then
+        self:AddLine(T["SpellID"] .. ": " .. aura.spellId, .25,.5,1)
+      end
+      self:Show()
+    end)
+  end
 end)

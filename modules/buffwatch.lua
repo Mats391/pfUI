@@ -1,6 +1,5 @@
-pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
+pfUI:RegisterModule("buffwatch", function ()
   local rawborder, border = GetBorderSize("panels")
-  local scanner = libtipscan:GetScanner("buffwatch")
 
   local fcache = {}
   local function BuffIsVisible(config, name)
@@ -74,27 +73,15 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     return anchor
   end
 
-  local function GetBuffData(unit, id, type, selfdebuff)
-    if unit == "player" then
-      local bid = GetPlayerBuff(PLAYER_BUFF_START_ID+id, type)
-      local stacks = GetPlayerBuffApplications(bid)
-      local remaining = GetPlayerBuffTimeLeft(bid)
-      local texture = GetPlayerBuffTexture(bid)
-      local name
+  -- reusable GetAuraSlots buffer, filled once per RefreshBuffBarFrame
+  local auraSlots = {}
 
-      if texture then
-        scanner:SetPlayerBuff(bid)
-        name = scanner:Line(1)
-      end
-
-      return remaining, texture, name, stacks
-    elseif libdebuff and selfdebuff then
-      local name, rank, texture, stacks, dtype, duration, timeleft = libdebuff:UnitOwnDebuff(unit, id)
-      return timeleft, texture, name, stacks
-    elseif libdebuff then
-      local name, rank, texture, stacks, dtype, duration, timeleft = libdebuff:UnitDebuff(unit, id)
-      return timeleft, texture, name, stacks
-    end
+  -- Reads one aura by the slot id GetAuraSlots returned (nil slot -> nil).
+  local function GetBuffData(unit, slot)
+    local name, icon, count, dispelType, _, expirationTime = C_UnitAuras.UnitAuraBySlot(unit, slot)
+    if not name then return end
+    local remaining = expirationTime > 0 and (expirationTime - GetTime()) or 0
+    return remaining, icon, name, count, dispelType
   end
 
   local function StatusBarOnClick()
@@ -106,45 +93,29 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
           if val == skill then return end
         end
         config.whitelist = config.whitelist .. "#" .. skill
+        fcache[tostring(config)] = nil -- invalidate so the new entry takes effect immediately
         DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc" .. skill .. "|r" .. T["is now whitelisted."])
       elseif IsShiftKeyDown() then
         for _, val in pairs({strsplit("#", config.blacklist)}) do
           if val == skill then return end
         end
         config.blacklist = config.blacklist .. "#" .. skill
+        fcache[tostring(config)] = nil -- invalidate so the new entry takes effect immediately
         DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc" .. skill .. "|r" .. T["is now blacklisted."])
       end
+      this.parent.Refresh()
     elseif this.parent.unit == "player" then
-      CancelPlayerBuff(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,this.type))
+      local aura = C_UnitAuras.GetAuraDataByIndex("player", this.id, this.type)
+      if aura and aura.spellId then C_Spell.CancelSpellByID(aura.spellId) end
     end
   end
 
   local function StatusBarOnEnter()
     GameTooltip:SetOwner(this, "NONE")
 
-    if this.unit == "player" then
-      GameTooltip:SetPlayerBuff(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,this.type))
-    elseif this.type == "HARMFUL" then
-      -- For "only own debuffs" mode: find the REAL slot by matching spell name AND caster
-      local config = this.parent and this.parent.config
-      if config and config.selfdebuff == "1" and libdebuff then
-        local ownDebuffName = libdebuff:UnitOwnDebuff(this.unit, this.id)
-        if ownDebuffName then
-          -- Search through all game slots to find OUR debuff with matching name
-          for gameSlot = 1, 16 do
-            local gameName, _, _, _, _, _, _, gameCaster = libdebuff:UnitDebuff(this.unit, gameSlot)
-            if gameName == ownDebuffName and gameCaster == "player" then
-              GameTooltip:SetUnitDebuff(this.unit, gameSlot)
-              break
-            end
-          end
-        end
-      else
-        GameTooltip:SetUnitDebuff(this.unit, this.id)
-      end
-    elseif this.type == "HELPFUL" then
-      GameTooltip:SetUnitBuff(this.unit, this.id)
-    end
+    -- C_UnitAuras lists the player's own auras first, so the selfdebuff
+    -- (HARMFUL|PLAYER) list is a prefix of the HARMFUL list: same index.
+    GameTooltip:SetUnitAura(this.unit, this.id, this.type)
 
     if IsShiftKeyDown() then
       GameTooltip:AddLine(" ")
@@ -175,8 +146,7 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     local color = parent.color
     local bordercolor = parent.bordercolor
     local textcolor = parent.textcolor
-    local width = parent:GetWidth()
-    local height = parent:GetHeight()
+    local width, height = parent:GetSize()
     local framename = "pf" .. parent.unit .. ( parent.type == "HARMFUL" and "Debuff" or "Buff" ) .. "Bar" .. bar
 
     local font = parent.config.use_unitfonts == "1" and pfUI.font_unit or pfUI.font_default
@@ -185,8 +155,7 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     frame:EnableMouse(1)
     frame:Hide()
     frame:SetPoint("BOTTOM", 0, (bar-1)*(height+2*border+1))
-    frame:SetWidth(width)
-    frame:SetHeight(height)
+    frame:SetSize(width, height)
 
     frame.bar = CreateFrame("StatusBar", "pfBuffBar" .. bar, frame)
     frame.bar:SetPoint("TOPLEFT", frame, "TOPLEFT", height+1, 0)
@@ -215,8 +184,7 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     frame.time:SetJustifyH("RIGHT")
 
     frame.icon = frame:CreateTexture(nil, "OVERLAY")
-    frame.icon:SetWidth(height)
-    frame.icon:SetHeight(height)
+    frame.icon:SetSize(height, height)
     frame.icon:SetPoint("LEFT", frame, "LEFT", 0, 0)
     frame.icon:SetTexCoord(.07,.93,.07,.93)
 
@@ -238,7 +206,7 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
 
     CreateBackdrop(frame)
     CreateBackdropShadow(frame)
-    if bordercolor.r ~= "0" and bordercolor.g ~= "0" and bordercolor.b ~= "0" and bordercolor.a ~= "0" then
+    if bordercolor.r ~= 0 and bordercolor.g ~= 0 and bordercolor.b ~= 0 and bordercolor.a ~= 0 then
       frame.backdrop:SetBackdropBorderColor(bordercolor.r,bordercolor.g,bordercolor.b,1)
     end
 
@@ -248,9 +216,15 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
   local function RefreshBuffBarFrame(frame)
     -- reinitialize all active buffs
     local selfdebuff = frame.config.selfdebuff == "1"
+    local filter = (selfdebuff and frame.type == "HARMFUL") and "HARMFUL|PLAYER" or frame.type
+
+    -- one GetAuraSlots enumeration per refresh instead of a by-index walk per
+    -- bar; the i-th slot is the i-th aura of the filtered list, so `i` stays
+    -- the index the tooltip / cancel handlers pass to the by-index API
+    ScanAuraSlots(frame.unit, filter, auraSlots, 32)
 
     for i=1,32 do
-      local timeleft, texture, name, stacks = GetBuffData(frame.unit, i, frame.type, selfdebuff)
+      local timeleft, texture, name, stacks, dtype = GetBuffData(frame.unit, auraSlots[i])
       timeleft = timeleft or 0
 
       if texture and name and name ~= "" and BuffIsVisible(frame.config, name) then
@@ -259,19 +233,21 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
         frame.buffs[i][3] = name
         frame.buffs[i][4] = texture
         frame.buffs[i][5] = stacks
+        frame.buffs[i][6] = dtype
       else
         frame.buffs[i][1] = 0
         frame.buffs[i][2] = nil
         frame.buffs[i][3] = nil
         frame.buffs[i][4] = nil
         frame.buffs[i][5] = 0
+        frame.buffs[i][6] = nil
       end
     end
 
     table.sort(frame.buffs, frame.buffcmp)
 
     -- create a buff bar for each below threshold
-    local bar = 1
+    local bar, crossing = 1, nil
     for id, data in pairs(frame.buffs) do
       if data[1] and ((data[1] ~= 0 and data[1] < frame.threshold) or frame.threshold == -1) -- timeleft checks
         and data[3] and data[3] ~= "" -- buff has a name
@@ -308,11 +284,9 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
           -- calculate dynamic auto color
           local r, g, b
           if frame.type == "HARMFUL" then
-            r, g, b = 1, .2, .2
-            local _, _, dtype = UnitDebuff(frame.unit, data[2])
-            if dtype and DebuffTypeColor[dtype] then
-              r,g,b = DebuffTypeColor[dtype].r,DebuffTypeColor[dtype].g,DebuffTypeColor[dtype].b
-            end
+            -- official Blizzard dispel-type colors (matches unitframes/buff);
+            -- nil/unknown type falls back to the DEBUFF_TYPE_NONE colour
+            r, g, b = C_UnitAuras.GetAuraDispelTypeColor(data[6] or ""):GetRGBA()
           else
             r,g,b = str2rgb(data[3])
           end
@@ -367,6 +341,10 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
 
         frame.bars[bar]:Show()
         bar = bar + 1
+      elseif data[1] and data[1] > 0 and data[3] and data[4] and frame.threshold ~= -1 then
+        -- still above the threshold: its bar shows once it drops under
+        local wait = data[1] - frame.threshold
+        if not crossing or wait < crossing then crossing = wait end
       end
     end
 
@@ -374,13 +352,11 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     for i = bar, table.getn(frame.bars) do
       frame.bars[i]:Hide()
     end
-  end
 
-  -- Create a new Buff Bar
-  local function BuffBarFrameOnUpdate()
-    if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + .4 end
-    RefreshBuffBarFrame(this)
-    this:RefreshPosition()
+    -- no event marks an aura's time left dropping under the threshold, so
+    -- wake when the next one does
+    if frame.crossing then frame.crossing:Cancel() end
+    frame.crossing = crossing and C_Timer.NewTimer(crossing + .1, frame.Refresh) or nil
   end
 
   local function RefreshPosition(self)
@@ -400,6 +376,19 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     end
   end
 
+  -- every watch frame: one stacks on the bars of another, so all of them
+  -- re-anchor together
+  local watched = {}
+  local function RefreshPositions()
+    for _, frame in pairs(watched) do frame:RefreshPosition() end
+  end
+
+  -- the bars sit above their unit frame's aura rows, which move when the
+  -- rows lay out again
+  pfUI.events:RegisterCallback("unitframe:auras", function(_, unit)
+    if unit == pfUI.uf.player or unit == pfUI.uf.target then RefreshPositions() end
+  end, "buffwatch")
+
   local function CreateBuffBarFrame(unit, type)
     local framename = "pf" .. unit .. ( type == "HARMFUL" and "Debuff" or "Buff" ) .. "Bar"
     local frame = _G[framename] or CreateFrame("Frame", framename, UIParent)
@@ -415,9 +404,22 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     end
 
     frame.RefreshPosition = RefreshPosition
+    frame.Refresh = function()
+      RefreshBuffBarFrame(frame)
+      RefreshPositions()
+    end
 
-    -- OnEvent (UNIT_AURA) doesn't trigger properly on buff refresh
-    frame:SetScript("OnUpdate", BuffBarFrameOnUpdate)
+    -- UNIT_AURA_DELTA reports refreshes and new durations as well, so the bars
+    -- follow the auras on events alone. A new target is another unit, whose
+    -- auras no delta describes.
+    frame:RegisterUnitEvent("UNIT_AURA_DELTA", frame.unit)
+    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    if frame.unit == "target" then frame:RegisterEvent("PLAYER_TARGET_CHANGED") end
+    frame:SetScript("OnEvent", frame.Refresh)
+    table.insert(watched, frame)
+
+    -- the first read waits until the caller has configured the frame
+    RunNextFrame(frame.Refresh)
 
     return frame
   end
@@ -434,18 +436,15 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
   if pfUI.uf.player and C.buffbar.pbuff.enable == "1" then
     pfUI.uf.player.buffbar = CreateBuffBarFrame("Player", "HELPFUL")
     local config = C.buffbar.pbuff
-    local r, g, b, a = strsplit(",", config.color)
-    local br, bg, bb, ba = strsplit(",", config.bordercolor)
-    local tr, tg, tb, ta = strsplit(",", config.textcolor)
 
     pfUI.uf.player.buffbar:SetWidth(config.width == "-1" and pfUI.uf.player:GetWidth() or config.width)
     pfUI.uf.player.buffbar:SetHeight(config.height)
     pfUI.uf.player.buffbar.threshold = tonumber(config.threshold)
     pfUI.uf.player.buffbar.config = config
     pfUI.uf.player.buffbar.buffcmp = config.sort == "asc" and asc or desc
-    pfUI.uf.player.buffbar.color = { r = r, g = g, b = b, a = a }
-    pfUI.uf.player.buffbar.bordercolor = { r = br, g = bg, b = bb, a = ba }
-    pfUI.uf.player.buffbar.textcolor = { r = tr, g = tg, b = tb, a = ta }
+    pfUI.uf.player.buffbar.color = GetStringColorObject(config.color)
+    pfUI.uf.player.buffbar.bordercolor = GetStringColorObject(config.bordercolor)
+    pfUI.uf.player.buffbar.textcolor = GetStringColorObject(config.textcolor)
     pfUI.uf.player.buffbar.anchors = {
       pfUI.uf.player,
       pfUI.uf.player and pfUI.uf.player.debuffs,
@@ -460,9 +459,6 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
   -- create player debuffbars
   if pfUI.uf.player and C.buffbar.pdebuff.enable == "1" then
     local config = C.buffbar.pdebuff
-    local r, g, b, a = strsplit(",", config.color)
-    local br, bg, bb, ba = strsplit(",", config.bordercolor)
-    local tr, tg, tb, ta = strsplit(",", config.textcolor)
 
     pfUI.uf.player.debuffbar = CreateBuffBarFrame("Player", "HARMFUL")
     pfUI.uf.player.debuffbar:SetWidth(config.width == "-1" and pfUI.uf.player:GetWidth() or config.width)
@@ -470,9 +466,9 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
     pfUI.uf.player.debuffbar.threshold = tonumber(config.threshold)
     pfUI.uf.player.debuffbar.config = config
     pfUI.uf.player.debuffbar.buffcmp = config.sort == "asc" and asc or desc
-    pfUI.uf.player.debuffbar.color = { r = r, g = g, b = b, a = a }
-    pfUI.uf.player.debuffbar.bordercolor = { r = br, g = bg, b = bb, a = ba }
-    pfUI.uf.player.debuffbar.textcolor = { r = tr, g = tg, b = tb, a = ta }
+    pfUI.uf.player.debuffbar.color = GetStringColorObject(config.color)
+    pfUI.uf.player.debuffbar.bordercolor = GetStringColorObject(config.bordercolor)
+    pfUI.uf.player.debuffbar.textcolor = GetStringColorObject(config.textcolor)
     pfUI.uf.player.debuffbar.anchors = {
       pfUI.uf.player,
       pfUI.uf.player and pfUI.uf.player.buffbar and pfUI.uf.player.buffbar.bars,
@@ -488,18 +484,15 @@ pfUI:RegisterModule("buffwatch", "vanilla:tbc", function ()
   -- create target debuffbars
   if pfUI.uf.target and C.buffbar.tdebuff.enable == "1" then
     local config = C.buffbar.tdebuff
-    local r, g, b, a = strsplit(",", config.color)
-    local br, bg, bb, ba = strsplit(",", config.bordercolor)
-    local tr, tg, tb, ta = strsplit(",", config.textcolor)
 
     pfUI.uf.target.debuffbar = CreateBuffBarFrame("Target", "HARMFUL")
     pfUI.uf.target.debuffbar:SetWidth(config.width == "-1" and pfUI.uf.target:GetWidth() or config.width)
     pfUI.uf.target.debuffbar:SetHeight(config.height)
     pfUI.uf.target.debuffbar.config = config
     pfUI.uf.target.debuffbar.buffcmp = config.sort == "asc" and asc or desc
-    pfUI.uf.target.debuffbar.color = { r = r, g = g, b = b, a = a }
-    pfUI.uf.target.debuffbar.bordercolor = { r = br, g = bg, b = bb, a = ba }
-    pfUI.uf.target.debuffbar.textcolor = { r = tr, g = tg, b = tb, a = ta }
+    pfUI.uf.target.debuffbar.color = GetStringColorObject(config.color)
+    pfUI.uf.target.debuffbar.bordercolor = GetStringColorObject(config.bordercolor)
+    pfUI.uf.target.debuffbar.textcolor = GetStringColorObject(config.textcolor)
     pfUI.uf.target.debuffbar.threshold = tonumber(config.threshold)
     pfUI.uf.target.debuffbar.anchors = {
       pfUI.uf.target,

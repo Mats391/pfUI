@@ -1,4 +1,4 @@
-pfUI:RegisterModule("mapreveal", "vanilla:tbc", function ()
+pfUI:RegisterModule("mapreveal", function ()
   if Cartographer then return end
   if METAMAP_TITLE then return end
 
@@ -30,39 +30,13 @@ pfUI:RegisterModule("mapreveal", "vanilla:tbc", function ()
     pfUI.mapreveal:UpdateConfig()
   end)
 
-  local function unpack_hash(prefix, hash)
-    local _, stored_prefix, textureName, textureWidth, textureHeight, offsetX, offsetY, mapPointX, mapPointY, name
-    _, _, stored_prefix, textureName, textureWidth, textureHeight, offsetX, offsetY = string.find(hash, "^([|]?)([^:]+):([^:]+):([^:]+):([^:]+):([^:]+)")
-    if (not textureName or not offsetY) then
-      return
-    end
-    if (offsetY) then
-      _, _, mapPointX, mapPointY = string.find(hash,"^[|]?[^:]+:[^:]+:[^:]+:[^:]+:[^:]+:([^:]+):([^:]+)")
-    end
-    if (not mapPointY) then
-      mapPointX = 0 mapPointY = 0
-    end
-    if (stored_prefix ~= "|") then
-      name = textureName
-      textureName = string.format("%s%s",prefix,textureName)
-    end
-    return textureName, textureWidth + 0, textureHeight + 0, offsetX + 0, offsetY + 0, mapPointX + 0, mapPointY + 0, name
-  end
-
-  local explores = {}
   local explorecaches = {}
-  local alreadyknown = {} -- per-zone accumulator: { [zone] = { [texName] = true } }
 
   -- Own texture pool - separate from Blizzard's WorldMapOverlay textures
-  local pfOverlays = {}
-  local pfOverlayMax = 0
-
-  local function pfGetOverlay(idx)
-    if not pfOverlays[idx] then
-      pfOverlays[idx] = WorldMapDetailFrame:CreateTexture("pfReveal"..idx, "BORDER")
-    end
-    return pfOverlays[idx]
-  end
+  local overlayPool = CreateTexturePool(WorldMapDetailFrame, "BORDER", nil, nil, function(_, tex)
+    tex:Hide()
+    tex:ClearAllPoints()
+  end)
 
   local exploreEnter = function()
     WorldMapTooltip:ClearLines()
@@ -71,138 +45,127 @@ pfUI:RegisterModule("mapreveal", "vanilla:tbc", function ()
     WorldMapTooltip:AddLine(this.name, 1, 1, 1)
     WorldMapTooltip:Show()
 
-    if not explorecaches[this.name] then return end
+    if not explorecaches[this.area] then return end
     if C.appearance.worldmap.mapreveal == "0" then return end
-    for texture in pairs(explorecaches[this.name]) do
+    for texture in pairs(explorecaches[this.area]) do
       texture:SetVertexColor(1,1,1,1)
     end
   end
 
   local exploreLeave = function()
     WorldMapTooltip:Hide()
-    if not explorecaches[this.name] then return end
+    if not explorecaches[this.area] then return end
     if C.appearance.worldmap.mapreveal == "0" then return end
     local r,g,b,a = GetStringColor(C.appearance.worldmap.mapreveal_color)
-    for texture in pairs(explorecaches[this.name]) do
+    for texture in pairs(explorecaches[this.area]) do
       texture:SetVertexColor(r,g,b,a)
     end
   end
 
-  -- overlay data with lazy init
-  local overlayData = setmetatable(pfMapOverlayData, {__index = function(t,k)
-    local v = {}
-    rawset(t,k,v)
-    return v
-  end})
+  -- Magnifying-glass icons for unexplored overlays. Everything constant lives
+  -- in the creator; the update only anchors and labels what it acquires -- and
+  -- it only acquires the ones it is going to show, where the old table grew an
+  -- icon for every overlay in the zone and hid most of them again.
+  local function CreateExplore()
+    local explore = CreateFrame("Frame", nil, WorldMapDetailFrame)
+    explore:SetSize(16, 16)
+    explore:SetScript("OnEnter", exploreEnter)
+    explore:SetScript("OnLeave", exploreLeave)
+    explore:EnableMouse(true)
+    explore:SetFrameLevel(255)
+
+    explore.tex = explore:CreateTexture(nil, "OVERLAY")
+    explore.tex:SetTexture("Interface\\WorldMap\\WorldMap-MagnifyingGlass")
+    explore.tex:SetBlendMode("ADD")
+    explore.tex:SetTexCoord(.08, .92, .08, .92)
+    explore.tex:SetAllPoints()
+
+    return explore
+  end
+
+  local explorePool = CreateObjectPool(CreateExplore, function(_, explore)
+    explore:Hide()
+    explore:ClearAllPoints()
+  end)
 
   local function pfWorldMapFrame_Update()
     -- clear stale caches
     for k in pairs(explorecaches) do explorecaches[k] = nil end
 
-    -- hide all our textures from last frame
-    for i = 1, pfOverlayMax do
-      pfOverlays[i]:Hide()
-    end
+    -- hide all our textures and icons from last frame
+    overlayPool:ReleaseAll()
+    explorePool:ReleaseAll()
+
+    local showExplore = C.appearance.worldmap.mapexploration == "1"
+    local showReveal = C.appearance.worldmap.mapreveal == "1"
+    if not showExplore and not showReveal then return end
 
     local r,g,b,a = GetStringColor(C.appearance.worldmap.mapreveal_color)
     local mapFileName = GetMapInfo()
     if not mapFileName then mapFileName = "World" end
 
-    local prefix = string.format("Interface\\WorldMap\\%s\\", mapFileName)
-    local numOverlays = GetNumMapOverlays()
+    -- ClassicAPI: full overlay list for the viewed zone (explored + unexplored),
+    -- read straight from WorldMapOverlay.dbc. Replaces the hand-measured pfMapOverlayData.
+    local zoneData = C_Map.GetMapOverlays() or {}
 
-    -- accumulate explored overlays per zone (never clear, only add)
-    if not alreadyknown[mapFileName] then alreadyknown[mapFileName] = {} end
-    for i = 1, numOverlays do
-      local texName = GetMapOverlayInfo(i)
-      if texName then alreadyknown[mapFileName][string.upper(texName)] = true end
-    end
-
-    local zoneKnown = alreadyknown[mapFileName]
-
-    -- hide explore icons
-    for _, frame in pairs(explores) do frame:Hide() end
-
-    local zoneData = overlayData[mapFileName]
-    local textureCount = 0
-
-    for i, hash in ipairs(zoneData) do
-      local textureName, textureWidth, textureHeight, offsetX, offsetY, mapPointX, mapPointY, name = unpack_hash(prefix, hash)
-      if not textureName then break end
-
-      -- explore magnifying glass icon
-      explores[i] = explores[i] or CreateFrame("Frame", nil, WorldMapDetailFrame)
-      local explore = explores[i]
-      explore:SetWidth(16)
-      explore:SetHeight(16)
-      explore:SetPoint("TOPLEFT", "WorldMapDetailFrame", "TOPLEFT", offsetX + textureWidth/2, -offsetY - textureHeight/2)
-      explore:SetScript("OnEnter", exploreEnter)
-      explore:SetScript("OnLeave", exploreLeave)
-      explore:EnableMouse(true)
-      explore:SetFrameLevel(255)
-      explore.name = mapFileName .. " (" .. name .. ")"
-      explore.tex = explore.tex or explore:CreateTexture("", "OVERLAY")
-      explore.tex:SetBlendMode("ADD")
-      explore.tex:SetTexCoord(.08, .92, .08, .92)
-      explore.tex:SetAllPoints()
-
-      if C.appearance.worldmap.mapexploration == "1" and not zoneKnown[string.upper(textureName)] then
-        explore.tex:SetTexture("Interface\\WorldMap\\WorldMap-MagnifyingGlass")
-        explore:Show()
-      else
-        explore:Hide()
-      end
-
-      -- render overlay texture tiles on BORDER draw layer
-      -- Blizzard's explored overlays on ARTWORK draw on top of BORDER
-      if C.appearance.worldmap.mapreveal == "1" then
-        local numH = math.ceil(textureWidth / 256)
-        local numV = math.ceil(textureHeight / 256)
-        local texPixW, texFileW, texPixH, texFileH
-
-        for j = 1, numV do
-          if j < numV then
-            texPixH = 256
-            texFileH = 256
-          else
-            texPixH = mod(textureHeight, 256)
-            if texPixH == 0 then texPixH = 256 end
-            texFileH = 16
-            while texFileH < texPixH do texFileH = texFileH * 2 end
-          end
-
-          for k = 1, numH do
-            textureCount = textureCount + 1
-            local tex = pfGetOverlay(textureCount)
-
-            if k < numH then
-              texPixW = 256
-              texFileW = 256
-            else
-              texPixW = mod(textureWidth, 256)
-              if texPixW == 0 then texPixW = 256 end
-              texFileW = 16
-              while texFileW < texPixW do texFileW = texFileW * 2 end
-            end
-
-            tex:SetWidth(texPixW)
-            tex:SetHeight(texPixH)
-            tex:SetTexCoord(0, texPixW/texFileW, 0, texPixH/texFileH)
-            tex:ClearAllPoints()
-            tex:SetPoint("TOPLEFT", "WorldMapDetailFrame", "TOPLEFT", offsetX + 256*(k-1), -(offsetY + 256*(j-1)))
-            tex:SetTexture(string.format("%s%s", textureName, ((j-1)*numH + k)))
-
-            explorecaches[name] = explorecaches[name] or {}
-            explorecaches[name][tex] = true
-
-            tex:SetVertexColor(r,g,b,a)
-            tex:Show()
-          end
+    -- ClassicAPI: the unexplored subset of the viewed zone, using the engine's
+    -- own explored-bit test. Replaces the alreadyknown accumulator, which
+    -- replayed the explored-only GetMapOverlayInfo view. Keyed by the bare
+    -- texture name, the same key the icon cache below uses.
+    local unknown = {}
+    if showExplore then
+      for _, overlay in ipairs(C_MapExplorationInfo.GetUnexploredMapTextures() or {}) do
+        if overlay.textureName and overlay.textureName ~= "" then
+          unknown[string.upper(overlay.textureName)] = true
         end
       end
     end
 
-    pfOverlayMax = math.max(pfOverlayMax, textureCount)
+    for _, overlay in ipairs(zoneData) do
+      local name          = overlay.textureName   -- bare, e.g. "DRYGULCHRAVINE"
+      local textureWidth  = overlay.textureWidth
+      local textureHeight = overlay.textureHeight
+      local offsetX       = overlay.offsetX
+      local offsetY       = overlay.offsetY
+
+      -- explore magnifying glass icon for overlays the engine still
+      -- counts as unexplored.
+      if showExplore and unknown[string.upper(name)] then
+        local explore = explorePool:Acquire()
+        explore:SetPoint("TOPLEFT", "WorldMapDetailFrame", "TOPLEFT", offsetX + textureWidth/2, -offsetY - textureHeight/2)
+        explore.name = mapFileName .. " (" .. name .. ")"
+        explore.area = name -- cache key: explorecaches is keyed by the plain area name
+        explore:Show()
+      end
+
+      -- render overlay texture tiles on BORDER draw layer
+      -- Blizzard's explored overlays on ARTWORK draw on top of BORDER
+      --
+      -- overlay.tiles is pre-resolved by ClassicAPI: per-tile file /
+      -- draw size / texcoords / canvas position, with Octo's data
+      -- quirks (sliver columns the DBC rect rounds away, foreign tiles
+      -- appended to the number sequence, upscaled re-exports) already
+      -- disambiguated from the actual BLP dimensions. No 256px grid
+      -- math here — deriving the grid from textureWidth/Height is
+      -- exactly what shears quirky overlays (e.g. Icepoint's Kaneq'nuun).
+      if showReveal then
+        for _, tile in ipairs(overlay.tiles) do
+          local tex = overlayPool:Acquire()
+
+          tex:SetSize(tile.width, tile.height)
+          tex:SetTexCoord(0, tile.texCoordX, 0, tile.texCoordY)
+          tex:ClearAllPoints()
+          tex:SetPoint("TOPLEFT", "WorldMapDetailFrame", "TOPLEFT", tile.offsetX, -tile.offsetY)
+          tex:SetTexture(tile.file)
+
+          explorecaches[name] = explorecaches[name] or {}
+          explorecaches[name][tex] = true
+
+          tex:SetVertexColor(r,g,b,a)
+          tex:Show()
+        end
+      end
+    end
   end
 
   -- hook WorldMapFrame_Update
@@ -211,5 +174,16 @@ pfUI:RegisterModule("mapreveal", "vanilla:tbc", function ()
     origUpdate(unpack(arg))
     pfWorldMapFrame_Update()
   end
+
+  -- live refresh while the map is open: exploration changes arrive on this
+  -- event. Zone switches, zoom and (re)opens still come through the hook
+  -- above, so nothing is redrawn while the map is closed — the next open
+  -- rebuilds from the current state.
+
+  pfUI.events:RegisterFrameEventAndCallback("MAP_EXPLORATION_UPDATED", function()
+    if WorldMapFrame and WorldMapFrame:IsShown() then
+      pfWorldMapFrame_Update()
+    end
+  end)
 
 end)

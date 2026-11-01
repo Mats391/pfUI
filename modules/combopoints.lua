@@ -1,11 +1,11 @@
-pfUI:RegisterModule("combopoints", "vanilla:tbc", function ()
+pfUI:RegisterModule("combopoints", function ()
   local rawborder, border = GetBorderSize()
 
   -- Hide Blizzard combo point frame and unregister all events to prevent it from popping up again
   ComboFrame:Hide()
   ComboFrame:UnregisterAllEvents()
 
-  local _, class = UnitClass("player")
+  local class = UnitClassBase("player")
   local combo_width = C["unitframes"]["combowidth"]
   local combo_height = C["unitframes"]["comboheight"]
   pfUI.combopoints = {}
@@ -23,15 +23,15 @@ pfUI:RegisterModule("combopoints", "vanilla:tbc", function ()
       pfUI.combopoints[point]:SetPoint("CENTER", UIParent, "CENTER", (point - 3) * (combo_width + border*3), 10 )
     end
 
-    pfUI.combopoints[point].tex = pfUI.combopoints[point]:CreateTexture("OVERLAY")
+    pfUI.combopoints[point].tex = pfUI.combopoints[point]:CreateTexture(nil, "OVERLAY")
     pfUI.combopoints[point].tex:SetAllPoints(pfUI.combopoints[point])
 
     if point < 3 then
-      pfUI.combopoints[point].tex:SetTexture(1, .3, .3, .75)
+      pfUI.combopoints[point].tex:SetColorTexture(1, .3, .3, .75)
     elseif point < 4 then
-      pfUI.combopoints[point].tex:SetTexture(1, 1, .3, .75)
+      pfUI.combopoints[point].tex:SetColorTexture(1, 1, .3, .75)
     else
-      pfUI.combopoints[point].tex:SetTexture(.3, 1, .3, .75)
+      pfUI.combopoints[point].tex:SetColorTexture(.3, 1, .3, .75)
     end
 
     UpdateMovable(pfUI.combopoints[point])
@@ -52,7 +52,7 @@ pfUI:RegisterModule("combopoints", "vanilla:tbc", function ()
   -- combo
   if class == "DRUID" or class == "ROGUE" then
     local combo = CreateFrame("Frame")
-    combo:RegisterEvent("UNIT_COMBO_POINTS")
+    combo:RegisterUnitEvent("UNIT_COMBO_POINTS", "player")
     combo:RegisterEvent("PLAYER_COMBO_POINTS")
     combo:RegisterEvent("PLAYER_TARGET_CHANGED")
     combo:RegisterEvent("PLAYER_ENTERING_WORLD")

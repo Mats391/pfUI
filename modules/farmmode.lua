@@ -1,10 +1,6 @@
-pfUI:RegisterModule("farmmode", "vanilla:tbc", function ()
+pfUI:RegisterModule("farmmode", function ()
   local function ToggleFarmMode()
-    if pfUI.farmmap:IsShown() then
-      pfUI.farmmap:Hide()
-    else
-      pfUI.farmmap:Show()
-    end
+    pfUI.farmmap:SetShown(not pfUI.farmmap:IsShown())
   end
 
   local function MoveNodes(layer)
@@ -25,8 +21,7 @@ pfUI:RegisterModule("farmmode", "vanilla:tbc", function ()
     Minimap_ZoomOut()
   end
 
-  _G.SLASH_PFFARMMAP1, _G.SLASH_PFFARMMAP2 = "/farm", "/farmmode"
-  _G.SlashCmdList.PFFARMMAP = ToggleFarmMode
+  pfUI.api.RegisterSlashCommand("PFFARMMAP", { "/farm", "/farmmode" }, ToggleFarmMode, true)
 
   pfUI.farmmap = CreateFrame("Minimap", "pfFarmMap", UIParent)
   pfUI.farmmap:Hide()
@@ -42,8 +37,9 @@ pfUI:RegisterModule("farmmode", "vanilla:tbc", function ()
   pfUI.farmmap:RegisterForDrag("LeftButton")
   pfUI.farmmap:SetScript("OnMouseWheel", function()
     if IsControlKeyDown() then
-      this:SetWidth(this:GetWidth() + (arg1 > 0 and 10 or -10))
-      this:SetHeight(this:GetHeight() + (arg1 > 0 and 10 or -10))
+      local adjust = (arg1 > 0 and 10 or -10)
+      local width, height = this:GetSize()
+      this:SetSize(width + adjust, height + adjust)
       Minimap_ZoomIn()
       Minimap_ZoomOut()
     elseif IsShiftKeyDown() then
@@ -136,7 +132,7 @@ pfUI:RegisterModule("farmmode", "vanilla:tbc", function ()
     pfUI.farmmap.button.txt = pfUI.farmmap.button:CreateFontString("pfFarmMapText", "LOW", "GameFontWhite")
     pfUI.farmmap.button.txt:SetFont(pfUI.font_default, C.global.font_size, "OUTLINE")
     pfUI.farmmap.button.txt:SetPoint("CENTER", 0, 0)
-    pfUI.farmmap.button.txt:SetText("|cff33ffcc FARM MODE")
+    pfUI.farmmap.button.txt:SetText("|cff33ffcc " .. T["FARM MODE"])
   end
 
   CreateBackdrop(pfUI.farmmap)

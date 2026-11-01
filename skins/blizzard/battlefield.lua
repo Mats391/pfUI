@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Battlefield", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Battlefield", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
 
@@ -52,8 +52,7 @@ pfUI:RegisterSkin("Battlefield", "vanilla:tbc", function ()
   end)
 
   BattlefieldFrame.textbox = CreateFrame("Frame", "BattlefieldFrameTextBox", BattlefieldFrame)
-  BattlefieldFrame.textbox:SetWidth(320)
-  BattlefieldFrame.textbox:SetHeight(110)
+  BattlefieldFrame.textbox:SetSize(320, 110)
   CreateBackdrop(BattlefieldFrame.textbox)
   BattlefieldFrame.textbox:SetPoint("BOTTOM", BattlefieldFrame.backdrop, "BOTTOM", 0, 36)
   BattlefieldFrameZoneDescription:ClearAllPoints()

@@ -1,39 +1,4 @@
-pfUI:RegisterModule("skin", "vanilla", function ()
-  -- align UIParent panels
-  pfUI.panelalign = CreateFrame("Frame", "pfUIParentPanelAlign", UIParent)
-  pfUI.panelalign:SetScript("OnUpdate", function()
-    -- throttle to 5 updates per second instead of every frame
-    if (this.tick or 0.2) > GetTime() then return else this.tick = GetTime() + 0.2 end
-
-    local left = UIParent.left
-    local center = UIParent.center
-    local rbpos, ropos
-
-    -- detect outer frame backdrops
-    if left and not left.rightObj then
-      left.rightObj = left.backdrop or left
-      for _, frame in pairs({left:GetChildren()}) do
-        rbpos = frame.backdrop and frame.backdrop.GetRight and frame.backdrop:GetRight()
-        ropos = left.rightObj  and left.rightObj.GetRight  and left.rightObj:GetRight()
-        if rbpos and ropos and rbpos > ropos then
-          left.rightObj = frame.backdrop
-        end
-      end
-    end
-
-    -- reset anchors
-    if not left or not left:IsShown() or not center or not center:IsShown() then
-      UIParent.pfLeftAligned = nil
-      return
-    elseif center and center:IsShown() and left and left:IsShown() then
-      local width = left.rightObj:GetRight()
-      if width and width ~= UIParent.pfLeftAligned then
-        center:SetPoint("TOPLEFT", "UIParent", "TOPLEFT", width + 10, -104)
-        UIParent.pfLeftAligned = width
-      end
-    end
-  end)
-
+pfUI:RegisterModule("skin", function ()
   -- durability frame
   pfUI.durability = CreateFrame("Frame", "pfDurability", UIParent)
   if pfUI.minimap then
@@ -50,24 +15,68 @@ pfUI:RegisterModule("skin", "vanilla", function ()
   DurabilityFrame:SetFrameLevel(1)
   DurabilityFrame.SetPoint = function() return end
 
-  if C.appearance.cd.blizzard == "1" then
-    hooksecurefunc("PaperDollItemSlotButton_Update", function()
-      local cooldown = _G[this:GetName().."Cooldown"]
-      if cooldown then cooldown.pfCooldownType = "BLIZZARD" end
-    end)
-
-    hooksecurefunc("SpellButton_UpdateButton", function()
-      local cooldown = _G[this:GetName().."Cooldown"]
-      if cooldown then cooldown.pfCooldownType = "BLIZZARD" end
-    end)
-  end
-
   for i = 1, UIDROPDOWNMENU_MAXLEVELS do
     CreateBackdrop(_G["DropDownList"..i.."MenuBackdrop"], nil, true, .8)
     CreateBackdropShadow(_G["DropDownList"..i.."MenuBackdrop"])
 
     CreateBackdrop(_G["DropDownList"..i.."Backdrop"], nil, true, .8)
     CreateBackdropShadow(_G["DropDownList"..i.."Backdrop"])
+  end
+
+  -- ClassicAPI menus that don't name a style of their own take pfUI's
+  function MenuVariants.GetDefaultMenuMixin() return pfUIMenuStyleMixin end
+  function MenuVariants.GetDefaultContextMenuMixin() return pfUIMenuStyleMixin end
+
+  -- ClassicAPI menus draw their checkboxes and radios with these. Both get a
+  -- pfUI box: a checked box holds a check, a selected radio a filled square.
+  local function CreateSelectionBox(frame, text)
+    local _, border = GetBorderSize()
+
+    local box = frame:AttachTexture()
+    frame.leftTexture1 = box
+    box:SetDrawLayer("BORDER")
+    box:SetPoint("LEFT")
+    box:SetSize(12, 12)
+    box:SetColorTexture(GetStringColorObject(C.appearance.border.color):GetRGBA())
+
+    local inside = frame:AttachTexture()
+    inside:SetDrawLayer("ARTWORK")
+    inside:SetPoint("TOPLEFT", box, "TOPLEFT", border, -border)
+    inside:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -border, border)
+    local r, g, b = GetStringColorObject(C.appearance.border.background):GetRGB()
+    inside:SetColorTexture(r, g, b, 1)
+
+    local fontString = frame:AttachFontString()
+    frame.fontString = fontString
+    fontString:SetPoint("LEFT", box, "RIGHT", 6, 0)
+    fontString:SetHeight(20)
+    fontString:SetTextToFit(text)
+
+    return box
+  end
+
+  function MenuVariants.CreateCheckbox(text, frame, isSelected, data)
+    local box = CreateSelectionBox(frame, text)
+    if isSelected(data) then
+      local check = frame:AttachTexture()
+      check:SetDrawLayer("OVERLAY")
+      check:SetPoint("CENTER", box)
+      check:SetSize(16, 16)
+      check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+    end
+    return box
+  end
+
+  function MenuVariants.CreateRadio(text, frame, isSelected, data)
+    local box = CreateSelectionBox(frame, text)
+    if isSelected(data) then
+      local dot = frame:AttachTexture()
+      dot:SetDrawLayer("OVERLAY")
+      dot:SetPoint("TOPLEFT", box, "TOPLEFT", 3, -3)
+      dot:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -3, 3)
+      dot:SetColorTexture(.2, 1, .8, 1)
+    end
+    return box
   end
 
   if C.global.errors_limit == "1" then

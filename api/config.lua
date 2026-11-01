@@ -60,7 +60,6 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("global",     nil,           "libhealth_dmg",    ".05")
 
   pfUI:UpdateConfig("gui",        nil,           "reloadmarker",     "0")
-  pfUI:UpdateConfig("gui",        nil,           "showdisabled",     "0")
 
   pfUI:UpdateConfig("buffs",      nil,           "buffs",            "1")
   pfUI:UpdateConfig("buffs",      nil,           "debuffs",          "1")
@@ -140,23 +139,55 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("appearance", "border",      "panels",           "-1")
   pfUI:UpdateConfig("appearance", "border",      "chat",             "-1")
   pfUI:UpdateConfig("appearance", "border",      "bags",             "-1")
-  pfUI:UpdateConfig("appearance", "cd",          "lowcolor",         "1,.2,.2,1")
-  pfUI:UpdateConfig("appearance", "cd",          "normalcolor",      "1,1,1,1")
-  pfUI:UpdateConfig("appearance", "cd",          "minutecolor",      ".2,1,1,1")
-  pfUI:UpdateConfig("appearance", "cd",          "hourcolor",        ".2,.5,1,1")
-  pfUI:UpdateConfig("appearance", "cd",          "daycolor",         ".2,.2,1,1")
-  pfUI:UpdateConfig("appearance", "cd",          "threshold",        "2")
-  pfUI:UpdateConfig("appearance", "cd",          "font_size",        "12")
-  pfUI:UpdateConfig("appearance", "cd",          "font_size_blizz",  "12")
-  pfUI:UpdateConfig("appearance", "cd",          "font_size_foreign","12")
-  pfUI:UpdateConfig("appearance", "cd",          "blizzard",         "1")
-  pfUI:UpdateConfig("appearance", "cd",          "foreign",          "0")
-  pfUI:UpdateConfig("appearance", "cd",          "milliseconds",     "1")
-  pfUI:UpdateConfig("appearance", "cd",          "hideanim",         "0")
-  pfUI:UpdateConfig("appearance", "cd",          "font",             "Interface\\AddOns\\pfUI\\fonts\\BigNoodleTitling.ttf")
-  pfUI:UpdateConfig("appearance", "cd",          "dynamicsize",      "1")
+
+  pfUI:UpdateConfig("cooldown",   nil,           "font",             "Interface\\AddOns\\pfUI\\fonts\\BigNoodleTitling.ttf")
+  pfUI:UpdateConfig("cooldown",   nil,           "font_size",        "12")
+  pfUI:UpdateConfig("cooldown",   nil,           "dynamicsize",      "1")
+  pfUI:UpdateConfig("cooldown",   nil,           "threshold",        "2")
+  pfUI:UpdateConfig("cooldown",   nil,           "milliseconds",     "1")
+  pfUI:UpdateConfig("cooldown",   nil,           "lowcolor",         "1,.2,.2,1")
+  pfUI:UpdateConfig("cooldown",   nil,           "normalcolor",      "1,1,1,1")
+  pfUI:UpdateConfig("cooldown",   nil,           "minutecolor",      ".2,1,1,1")
+  pfUI:UpdateConfig("cooldown",   nil,           "hourcolor",        ".2,.5,1,1")
+  pfUI:UpdateConfig("cooldown",   nil,           "daycolor",         ".2,.2,1,1")
+  pfUI:UpdateConfig("cooldown",   "actionbar",   "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "actionbar",   "animation",        "1")
+  pfUI:UpdateConfig("cooldown",   "actionbar",   "reverse",          "0")
+  pfUI:UpdateConfig("cooldown",   "bags",        "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "bags",        "animation",        "1")
+  pfUI:UpdateConfig("cooldown",   "bags",        "reverse",          "0")
+  pfUI:UpdateConfig("cooldown",   "blizzard",    "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "blizzard",    "animation",        "1")
+  pfUI:UpdateConfig("cooldown",   "blizzard",    "reverse",          "0")
+  pfUI:UpdateConfig("cooldown",   "unitframe",   "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "unitframe",   "animation",        "0")
+  pfUI:UpdateConfig("cooldown",   "unitframe",   "reverse",          "1")
+  pfUI:UpdateConfig("cooldown",   "indicator",   "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "indicator",   "animation",        "0")
+  pfUI:UpdateConfig("cooldown",   "indicator",   "reverse",          "0")
+  pfUI:UpdateConfig("cooldown",   "nameplate",   "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "nameplate",   "animation",        "0")
+  pfUI:UpdateConfig("cooldown",   "nameplate",   "reverse",          "1")
+  pfUI:UpdateConfig("cooldown",   "buff",        "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "buff",        "animation",        "1")
+  pfUI:UpdateConfig("cooldown",   "buff",        "reverse",          "1")
+  pfUI:UpdateConfig("cooldown",   "tooltip",     "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "tooltip",     "animation",        "0")
+  pfUI:UpdateConfig("cooldown",   "tooltip",     "reverse",          "0")
+  pfUI:UpdateConfig("cooldown",   "totem",       "text",             "1")
+  pfUI:UpdateConfig("cooldown",   "totem",       "animation",        "1")
+  pfUI:UpdateConfig("cooldown",   "totem",       "reverse",          "1")
+  pfUI:UpdateConfig("cooldown",   "lossofcontrol", "text",           "1")
+  pfUI:UpdateConfig("cooldown",   "lossofcontrol", "animation",      "1")
+  pfUI:UpdateConfig("cooldown",   "lossofcontrol", "reverse",        "0")
+  pfUI:UpdateConfig("cooldown",   "foreign",     "text",             "0")
+  pfUI:UpdateConfig("cooldown",   "foreign",     "animation",        "1")
+
   pfUI:UpdateConfig("appearance", "castbar",     "castbarcolor",     ".7,.7,.9,.8")
   pfUI:UpdateConfig("appearance", "castbar",     "channelcolor",     ".9,.9,.7,.8")
+  pfUI:UpdateConfig("appearance", "castbar",     "failcolor",        "1,.2,.2,.8")
+  pfUI:UpdateConfig("appearance", "castbar",     "shieldcolor",      ".8,.45,.45,.8")
+  pfUI:UpdateConfig("appearance", "castbar",     "fsrcolor",         ".9,.6,.2,.8")
   pfUI:UpdateConfig("appearance", "castbar",     "texture",          "Interface\\AddOns\\pfUI\\img\\bar")
   pfUI:UpdateConfig("appearance", "infight",     "screen",           "0")
   pfUI:UpdateConfig("appearance", "infight",     "aggro",            "0")
@@ -164,15 +195,19 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("appearance", "infight",     "intensity",           "16")
   pfUI:UpdateConfig("appearance", "bags",        "unusable",         "1")
   pfUI:UpdateConfig("appearance", "bags",        "unusable_color",   ".9,.2,.2,1")
+  pfUI:UpdateConfig("appearance", "bags",        "newitem",          "1")
+  pfUI:UpdateConfig("appearance", "bags",        "newitem_color",    "1,1,1,1")
   pfUI:UpdateConfig("appearance", "bags",        "borderlimit",      "1")
   pfUI:UpdateConfig("appearance", "bags",        "borderonlygear",   "0")
-  pfUI:UpdateConfig("appearance", "bags",        "fulltext",         "1")
   pfUI:UpdateConfig("appearance", "bags",        "movable",          "0")
   pfUI:UpdateConfig("appearance", "bags",        "abovechat",        "0")
   pfUI:UpdateConfig("appearance", "bags",        "hidechat",         "0")
   pfUI:UpdateConfig("appearance", "bags",        "icon_size",        "-1")
   pfUI:UpdateConfig("appearance", "bags",        "bagrowlength",     "10")
   pfUI:UpdateConfig("appearance", "bags",        "bankrowlength",    "10")
+  pfUI:UpdateConfig("appearance", "bags",        "autoSortOnOpen",   "0")
+  pfUI:UpdateConfig("appearance", "bags",        "sortreverse",      "0")
+  pfUI:UpdateConfig("appearance", "bags",        "sortprioreverse",  "0")
   pfUI:UpdateConfig("appearance", "minimap",     "size",             "140")
   pfUI:UpdateConfig("appearance", "minimap",     "arrowscale",       "1")
   pfUI:UpdateConfig("appearance", "minimap",     "zonetext",         "off")
@@ -197,6 +232,8 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("loot",       nil,           "rollannounce",     "0")
   pfUI:UpdateConfig("loot",       nil,           "raritytimer",      "1")
 
+  pfUI:UpdateConfig("loothistory", nil,          "autoshow",         "0")
+
   pfUI:UpdateConfig("unitframes", nil,           "disable",          "0")
   pfUI:UpdateConfig("unitframes", nil,           "pastel",           "1")
   pfUI:UpdateConfig("unitframes", nil,           "custom",           "0")
@@ -212,15 +249,14 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", nil,           "ragecolor",        "1,.5,.5,1")
   pfUI:UpdateConfig("unitframes", nil,           "focuscolor",       "1,1,.75,1")
 
-  pfUI:UpdateConfig("unitframes", nil,           "animation_speed",  "5")
+  pfUI:UpdateConfig("unitframes", nil,           "animatebars",      "1")
   pfUI:UpdateConfig("unitframes", nil,           "portraitalpha",    "0.1")
-  pfUI:UpdateConfig("unitframes", nil,           "always2dportrait", "0")
+  pfUI:UpdateConfig("unitframes", nil,           "portraitstyle",    "3d")
   pfUI:UpdateConfig("unitframes", nil,           "portraittexture",  "1")
   pfUI:UpdateConfig("unitframes", nil,           "layout",           "default")
   pfUI:UpdateConfig("unitframes", nil,           "rangecheck",       "0")
   pfUI:UpdateConfig("unitframes", nil,           "rangecheck_mode",  "vanilla")
   pfUI:UpdateConfig("unitframes", nil,           "rangecheck_distance", "40")
-  pfUI:UpdateConfig("unitframes", nil,           "buffdetect",       "0")
   pfUI:UpdateConfig("unitframes", nil,           "druidmanabar",     "1")
   pfUI:UpdateConfig("unitframes", nil,           "druidmanaheight",  "10")
   pfUI:UpdateConfig("unitframes", nil,           "druidmanawidth",   "-1")
@@ -228,8 +264,8 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", nil,           "druidmanaoffy",    "0")
   pfUI:UpdateConfig("unitframes", nil,           "druidmanaspace",   "-3")
   pfUI:UpdateConfig("unitframes", nil,           "druidmanatexture", "Interface\\AddOns\\pfUI\\img\\bar")
+  pfUI:UpdateConfig("unitframes", nil,           "druidmanatext",    "1")
 
-  pfUI:UpdateConfig("unitframes", nil,           "rangechecki",      "4")
   pfUI:UpdateConfig("unitframes", nil,           "combowidth",       "6")
   pfUI:UpdateConfig("unitframes", nil,           "comboheight",      "6")
   pfUI:UpdateConfig("unitframes", nil,           "swingtimerwidth",  "200")
@@ -244,6 +280,7 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", nil,           "swingtimerohcolor",".3,.8,.3,1")
   pfUI:UpdateConfig("unitframes", nil,           "swingtimerrangedcolor",".3,.6,1,1")
   pfUI:UpdateConfig("unitframes", nil,           "swingtimerrangedwarncolor",".9,0,0,1")
+  pfUI:UpdateConfig("unitframes", nil,           "swingtimeroutrangecolor",".5,.5,.5,1")
   pfUI:UpdateConfig("unitframes", nil,           "swingtimerhsqueue","1")
   pfUI:UpdateConfig("unitframes", nil,           "swingtimerattackspeed","0")
   pfUI:UpdateConfig("unitframes", nil,           "raidmarkerwidth",  "80")
@@ -277,9 +314,11 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", nil,           "reactive_size",    "28")
   pfUI:UpdateConfig("unitframes", nil,           "damage_tracking",  "0")
 
-  -- UnitXP Settings
-  pfUI:UpdateConfig("unitframes", nil,           "unitxp_font_size",    "13")
+  -- Target Indicators
+  pfUI:UpdateConfig("unitframes", nil,           "indicator_font_size", "13")
   pfUI:UpdateConfig("unitframes", nil,           "los_indicator",    "0")
+
+  -- UnitXP Settings
   pfUI:UpdateConfig("unitframes", nil,           "behind_indicator", "0")
   pfUI:UpdateConfig("unitframes", nil,           "hide_distance_yd", "0")
   pfUI:UpdateConfig("unitframes", nil,           "unitxp_notify",    "0")
@@ -319,6 +358,9 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", "player",      "showRest",                "0")
   pfUI:UpdateConfig("unitframes", "player",      "energy",                  "1")
   pfUI:UpdateConfig("unitframes", "player",      "manatick",                "0")
+  pfUI:UpdateConfig("unitframes", "player",      "showfsr",                 "1")
+  pfUI:UpdateConfig("unitframes", "player",      "fsrheight",               "4")
+  pfUI:UpdateConfig("unitframes", "player",      "fsrstyle",                "0")
   pfUI:UpdateConfig("unitframes", "player",      "display_haste",           "0")
   pfUI:UpdateConfig("unitframes", "player",      "display_haste_color",     "1,1,1,1")
   pfUI:UpdateConfig("unitframes", "player",      "display_spellpower",      "1")
@@ -381,6 +423,27 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", "grouppet",    "glowcombat",       "0")
   pfUI:UpdateConfig("unitframes", "grouppet",    "txthpright",       "healthperc")
 
+  pfUI:UpdateConfig("unitframes", "raidpet",     "portrait",         "off")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "width",            "50")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "height",           "14")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "pheight",          "0")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "buffs",            "off")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "buffsize",         "16")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "debuffs",          "off")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "debuffsize",       "16")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "faderange",        "1")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "glowcombat",       "0")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "txthpright",       "healthperc")
+  -- off by default; mirrors the raid grid layout when enabled
+  pfUI:UpdateConfig("unitframes", "raidpet",     "visible",          "0")
+  -- collapse: pack only pets that exist (from the roster snapshot) instead
+  -- of mirroring every raid slot
+  pfUI:UpdateConfig("unitframes", "raidpet",     "collapse",         "1")
+  -- pet block has its own layout, independent of the raid grid
+  pfUI:UpdateConfig("unitframes", "raidpet",     "raidlayout",       "8x5")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "raidpadding",      "3")
+  pfUI:UpdateConfig("unitframes", "raidpet",     "raidfill",         "VERTICAL")
+
   pfUI:UpdateConfig("unitframes", "raid",        "portrait",         "off")
   pfUI:UpdateConfig("unitframes", "raid",        "width",            "50")
   pfUI:UpdateConfig("unitframes", "raid",        "height",           "26")
@@ -399,6 +462,7 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", "raid",        "raidlayout",       "8x5")
   pfUI:UpdateConfig("unitframes", "raid",        "raidpadding",      "3")
   pfUI:UpdateConfig("unitframes", "raid",        "raidfill",         "VERTICAL")
+  pfUI:UpdateConfig("unitframes", "raid",        "collapse",         "0")
   pfUI:UpdateConfig("unitframes", "raid",        "raidgrouplabel",   "0")
   pfUI:UpdateConfig("unitframes", "raid",        "grouplabelxoff",   "0")
   pfUI:UpdateConfig("unitframes", "raid",        "grouplabelyoff",   "8")
@@ -454,7 +518,7 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("unitframes", "ptarget",     "txthpright",       "none")
   pfUI:UpdateConfig("unitframes", "ptarget",     "overhealperc",     "10")
 
-  local ufs = { "player", "target", "focus", "focustarget", "group", "grouptarget", "grouppet", "raid", "ttarget", "pet", "ptarget", "fallback", "tttarget" }
+  local ufs = { "player", "target", "focus", "focustarget", "group", "grouptarget", "grouppet", "raid", "raidpet", "ttarget", "pet", "ptarget", "fallback", "tttarget" }
   for _, unit in pairs(ufs) do
     pfUI:UpdateConfig("unitframes", unit,      "selfdebuff",       "0")
     pfUI:UpdateConfig("unitframes", unit,      "visible",          "1")
@@ -483,16 +547,20 @@ function pfUI:LoadConfig()
     pfUI:UpdateConfig("unitframes", unit,      "portraitwidth",    "-1")
     pfUI:UpdateConfig("unitframes", unit,      "panchor",          "TOP")
     pfUI:UpdateConfig("unitframes", unit,      "pspace",           "-3")
-    pfUI:UpdateConfig("unitframes", unit,      "cooldown_text",    "1")
-    pfUI:UpdateConfig("unitframes", unit,      "cooldown_anim",    "0")
     pfUI:UpdateConfig("unitframes", unit,      "buffs",            "TOPLEFT")
     pfUI:UpdateConfig("unitframes", unit,      "buffsize",         "20")
     pfUI:UpdateConfig("unitframes", unit,      "bufflimit",        "32")
     pfUI:UpdateConfig("unitframes", unit,      "buffperrow",       "8")
+    pfUI:UpdateConfig("unitframes", unit,      "ownbuffsize",      "-1")
+    pfUI:UpdateConfig("unitframes", unit,      "buffspacingx",     "1")
+    pfUI:UpdateConfig("unitframes", unit,      "buffspacingy",     "1")
     pfUI:UpdateConfig("unitframes", unit,      "debuffs",          "TOPLEFT")
     pfUI:UpdateConfig("unitframes", unit,      "debuffsize",       "20")
     pfUI:UpdateConfig("unitframes", unit,      "debufflimit",      "32")
     pfUI:UpdateConfig("unitframes", unit,      "debuffperrow",     "8")
+    pfUI:UpdateConfig("unitframes", unit,      "owndebuffsize",    "-1")
+    pfUI:UpdateConfig("unitframes", unit,      "debuffspacingx",   "1")
+    pfUI:UpdateConfig("unitframes", unit,      "debuffspacingy",   "1")
     pfUI:UpdateConfig("unitframes", unit,      "invert_healthbar", "0")
     pfUI:UpdateConfig("unitframes", unit,      "verticalbar",      "0")
     pfUI:UpdateConfig("unitframes", unit,      "buff_indicator",   "0")
@@ -509,7 +577,6 @@ function pfUI:LoadConfig()
     pfUI:UpdateConfig("unitframes", unit,      "show_procs",       "0")
     pfUI:UpdateConfig("unitframes", unit,      "show_totems",      "0")
     pfUI:UpdateConfig("unitframes", unit,      "all_procs",        "0")
-    pfUI:UpdateConfig("unitframes", unit,      "indicator_time",   "1")
     pfUI:UpdateConfig("unitframes", unit,      "indicator_stacks", "1")
     pfUI:UpdateConfig("unitframes", unit,      "indicator_size",   "10")
     pfUI:UpdateConfig("unitframes", unit,      "indicator_spacing","1")
@@ -527,7 +594,6 @@ function pfUI:LoadConfig()
 
     pfUI:UpdateConfig("unitframes", unit,      "glowaggro",        "1")
     pfUI:UpdateConfig("unitframes", unit,      "glowcombat",       "1")
-    pfUI:UpdateConfig("unitframes", unit,      "showtooltip",      "1")
     pfUI:UpdateConfig("unitframes", unit,      "healthcolor",      "1")
     pfUI:UpdateConfig("unitframes", unit,      "powercolor",       "1")
     pfUI:UpdateConfig("unitframes", unit,      "levelcolor",       "1")
@@ -632,13 +698,13 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("bars",       nil,           "animation",        "zoomfade")
   pfUI:UpdateConfig("bars",       nil,           "animmode",         "keypress")
   pfUI:UpdateConfig("bars",       nil,           "animalways",       "0")
-  pfUI:UpdateConfig("bars",       nil,           "macroscan",        "1")
   pfUI:UpdateConfig("bars",       nil,           "reagents",         "1")
   pfUI:UpdateConfig("bars",       nil,           "hunterbar",        "0")
   pfUI:UpdateConfig("bars",       nil,           "pagemasteralt",    "0")
   pfUI:UpdateConfig("bars",       nil,           "pagemastershift",  "0")
   pfUI:UpdateConfig("bars",       nil,           "pagemasterctrl",   "0")
   pfUI:UpdateConfig("bars",       nil,           "druidstealth",     "0")
+  pfUI:UpdateConfig("bars",       nil,           "priestshadow",     "0")
   pfUI:UpdateConfig("bars",       nil,           "showcastable",     "1")
   pfUI:UpdateConfig("bars",       nil,           "glowrange",        "1")
   pfUI:UpdateConfig("bars",       nil,           "rangecolor",       "1,0.1,0.1,1")
@@ -658,7 +724,6 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("bars",       nil,           "count_color",      ".2,1,.8,1")
   pfUI:UpdateConfig("bars",       nil,           "bind_size",        "8")
   pfUI:UpdateConfig("bars",       nil,           "bind_color",       "1,1,0,1")
-  pfUI:UpdateConfig("bars",       nil,           "cd_size",          "12")
 
   pfUI:UpdateConfig("bars",       "gryphons",    "texture",          "None")
   pfUI:UpdateConfig("bars",       "gryphons",    "color",            ".6,.6,.6,1")
@@ -729,8 +794,11 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("castbar",    "player",      "txtleftoffy",      "0")
   pfUI:UpdateConfig("castbar",    "player",      "showlag",          "0")
   pfUI:UpdateConfig("castbar",    "player",      "showrank",         "0")
+  pfUI:UpdateConfig("castbar",    "player",      "mergetradeskill",  "0")
   pfUI:UpdateConfig("castbar",    "player",      "txtrightoffx",     "0")
   pfUI:UpdateConfig("castbar",    "player",      "txtrightoffy",     "0")
+  pfUI:UpdateConfig("castbar",    "player",      "namealign",        "LEFT")
+  pfUI:UpdateConfig("castbar",    "player",      "timealign",        "RIGHT")
   pfUI:UpdateConfig("castbar",    "target",      "hide_pfui",        "0")
   pfUI:UpdateConfig("castbar",    "target",      "width",            "-1")
   pfUI:UpdateConfig("castbar",    "target",      "height",           "-1")
@@ -743,6 +811,8 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("castbar",    "target",      "showrank",         "0")
   pfUI:UpdateConfig("castbar",    "target",      "txtrightoffx",     "0")
   pfUI:UpdateConfig("castbar",    "target",      "txtrightoffy",     "0")
+  pfUI:UpdateConfig("castbar",    "target",      "namealign",        "LEFT")
+  pfUI:UpdateConfig("castbar",    "target",      "timealign",        "RIGHT")
   pfUI:UpdateConfig("castbar",    "focus",       "hide_pfui",        "0")
   pfUI:UpdateConfig("castbar",    "focus",       "width",            "-1")
   pfUI:UpdateConfig("castbar",    "focus",       "height",           "-1")
@@ -755,6 +825,8 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("castbar",    "focus",       "showrank",         "0")
   pfUI:UpdateConfig("castbar",    "focus",       "txtrightoffx",     "0")
   pfUI:UpdateConfig("castbar",    "focus",       "txtrightoffy",     "0")
+  pfUI:UpdateConfig("castbar",    "focus",       "namealign",        "LEFT")
+  pfUI:UpdateConfig("castbar",    "focus",       "timealign",        "RIGHT")
   pfUI:UpdateConfig("castbar",    nil,           "use_unitfonts",    "0")
 
   pfUI:UpdateConfig("tooltip",    nil,           "position",         "chat")
@@ -762,11 +834,16 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("tooltip",    nil,           "cursoroffset",     "20")
   pfUI:UpdateConfig("tooltip",    nil,           "extguild",         "1")
   pfUI:UpdateConfig("tooltip",    nil,           "itemid",           "0")
+  pfUI:UpdateConfig("tooltip",    nil,           "movespeed",        "0")
+  pfUI:UpdateConfig("tooltip",    nil,           "aurasource",       "0")
+  pfUI:UpdateConfig("tooltip",    nil,           "spellid",          "0")
+  pfUI:UpdateConfig("tooltip",    nil,           "unitid",           "0")
+  pfUI:UpdateConfig("tooltip",    nil,           "showbuffs",        "0")
   pfUI:UpdateConfig("tooltip",    nil,           "alpha",            "0.8")
   pfUI:UpdateConfig("tooltip",    nil,           "alwaysperc",       "0")
   pfUI:UpdateConfig("tooltip",    "compare",     "basestats",        "1")
   pfUI:UpdateConfig("tooltip",    "compare",     "showalways",       "0")
-  pfUI:UpdateConfig("tooltip",    "vendor",      "showalways",       "0")
+  pfUI:UpdateConfig("tooltip",    "vendor",      "showalways",       "1")
   pfUI:UpdateConfig("tooltip",    "questitem",   "showquest",        "1")
   pfUI:UpdateConfig("tooltip",    "questitem",   "showcount",        "0")
   pfUI:UpdateConfig("tooltip",    "statusbar",   "texture",          "Interface\\AddOns\\pfUI\\img\\bar")
@@ -785,13 +862,15 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("chat",       "text",        "timeformat",       "%H:%M:%S")
   pfUI:UpdateConfig("chat",       "text",        "timebracket",      "[]")
   pfUI:UpdateConfig("chat",       "text",        "timecolor",        ".8,.8,.8,1")
+  pfUI:UpdateConfig("chat",       "text",        "copytime",         "1")
   pfUI:UpdateConfig("chat",       "text",        "tintunknown",      "1")
   pfUI:UpdateConfig("chat",       "text",        "unknowncolor",     ".7,.7,.7,1")
   pfUI:UpdateConfig("chat",       "text",        "channelnumonly",   "1")
   pfUI:UpdateConfig("chat",       "text",        "playerlinks",      "1")
   pfUI:UpdateConfig("chat",       "text",        "detecturl",        "1")
   pfUI:UpdateConfig("chat",       "text",        "classcolor",       "1")
-  pfUI:UpdateConfig("chat",       "text",        "whosearchunknown", "0")
+  pfUI:UpdateConfig("chat",       "text",        "factionicons",     "0")
+  pfUI:UpdateConfig("chat",       "text",        "raceicons",        "0")
   pfUI:UpdateConfig("chat",       "text",        "playerlevel",      "0")
   pfUI:UpdateConfig("chat",       "left",        "width",            "380")
   pfUI:UpdateConfig("chat",       "left",        "height",           "180")
@@ -832,7 +911,7 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("nameplates", nil,           "selfdebuff",       "0")
   pfUI:UpdateConfig("nameplates", nil,           "showdebuffs_hostile",  "1")
   pfUI:UpdateConfig("nameplates", nil,           "showdebuffs_friendly", "0")
-  pfUI:UpdateConfig("nameplates", nil,           "guessdebuffs",     "1")
+  pfUI:UpdateConfig("nameplates", nil,           "owndebuffs",       "0")
   pfUI:UpdateConfig("nameplates", nil,           "clickthrough",     "0")
   pfUI:UpdateConfig("nameplates", nil,           "rightclick",       "1")
   pfUI:UpdateConfig("nameplates", nil,           "clickthreshold",   "0.5")
@@ -881,6 +960,7 @@ function pfUI:LoadConfig()
 
   pfUI:UpdateConfig("nameplates", nil,           "showhp",           "0")
   pfUI:UpdateConfig("nameplates", nil,           "hptextpos",        "RIGHT")
+  pfUI:UpdateConfig("nameplates", nil,           "nametextpos",      "CENTER")
   pfUI:UpdateConfig("nameplates", nil,           "hptextformat",     "curmaxs")
   pfUI:UpdateConfig("nameplates", nil,           "vpos",             "-10")
   pfUI:UpdateConfig("nameplates", nil,           "width",            "120")
@@ -902,9 +982,6 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("nameplates", "debuffs",     "blacklist",        "")
   pfUI:UpdateConfig("nameplates", "debuffs",     "showstacks",       "0")
   pfUI:UpdateConfig("nameplates", "debuffs",     "position",         "BOTTOM")
-  pfUI:UpdateConfig("nameplates", nil,           "debufftimers",     "1")
-  pfUI:UpdateConfig("nameplates", nil,           "debufftext",       "1")
-  pfUI:UpdateConfig("nameplates", nil,           "debuffanim",       "0")
 
   pfUI:UpdateConfig("abuttons",   nil,           "enable",           "1")
   pfUI:UpdateConfig("abuttons",   nil,           "position",         "bottom")
@@ -929,12 +1006,22 @@ function pfUI:LoadConfig()
   pfUI:UpdateConfig("gm",         nil,           "server",           "elysium")
 
   pfUI:UpdateConfig("questlog",   nil,           "showQuestLevels",  "0")
+
+  pfUI:UpdateConfig("character",  "inventory",   "durability",       "1")
+  pfUI:UpdateConfig("character",  "inventory",   "equipflyout",      "0")
+  pfUI:UpdateConfig("equipmentmanager", nil,     "autoswitch",       "1")
+  pfUI:UpdateConfig("equipmentmanager", nil,     "announce",         "1")
+  pfUI:UpdateConfig("equipmentmanager", nil,     "unusedquality",    "1")
+  pfUI:UpdateConfig("equipmentmanager", nil,     "unusedbank",       "1")
+  pfUI:UpdateConfig("character",  "reputation",  "repRequired",      "1")
+  pfUI:UpdateConfig("radar",      nil,           "range",            "10")
   pfUI:UpdateConfig("thirdparty", nil,           "chatbg",           "1")
   pfUI:UpdateConfig("thirdparty", nil,           "showmeter",        "0")
   pfUI:UpdateConfig("thirdparty", "dpsmate",     "skin",             "0")
   pfUI:UpdateConfig("thirdparty", "dpsmate",     "dock",             "0")
   pfUI:UpdateConfig("thirdparty", "shagudps",    "skin",             "0")
   pfUI:UpdateConfig("thirdparty", "shagudps",    "dock",             "0")
+  pfUI:UpdateConfig("thirdparty", "greedmeter",  "dock",             "0")
   pfUI:UpdateConfig("thirdparty", "swstats",     "skin",             "0")
   pfUI:UpdateConfig("thirdparty", "swstats",     "dock",             "0")
   pfUI:UpdateConfig("thirdparty", "ktm",         "skin",             "0")
@@ -1086,32 +1173,6 @@ function pfUI:MigrateConfig()
         pfUI_config.unitframes[unitframe].txthpright = pfUI_config.unitframes[unitframe].txtright
         pfUI_config.unitframes[unitframe].txtright = nil
       end
-    end
-  end
-
-  -- migrating animation_speed (> 3.1.2)
-  if checkversion(3, 1, 2) then
-    if tonumber(pfUI_config.unitframes.animation_speed) >= 13 then
-      pfUI_config.unitframes.animation_speed = "13"
-    elseif tonumber(pfUI_config.unitframes.animation_speed) >= 8 then
-      pfUI_config.unitframes.animation_speed = "8"
-    elseif tonumber(pfUI_config.unitframes.animation_speed) >= 5 then
-      pfUI_config.unitframes.animation_speed = "5"
-    elseif tonumber(pfUI_config.unitframes.animation_speed) >= 3 then
-      pfUI_config.unitframes.animation_speed = "3"
-    elseif tonumber(pfUI_config.unitframes.animation_speed) >= 2 then
-      pfUI_config.unitframes.animation_speed = "2"
-    elseif tonumber(pfUI_config.unitframes.animation_speed) >= 1 then
-      pfUI_config.unitframes.animation_speed = "1"
-    else
-      pfUI_config.unitframes.animation_speed = "5"
-    end
-  end
-
-  -- migrating rangecheck interval (> 3.2.2)
-  if checkversion(3, 2, 2) then
-    if tonumber(pfUI_config.unitframes.rangechecki) <= 1 then
-      pfUI_config.unitframes.rangechecki = "2"
     end
   end
 
@@ -1320,7 +1381,7 @@ function pfUI:MigrateConfig()
   -- migrate buff indicators into seperate options (> 4.6.2)
   if checkversion(4, 6, 2) and pfUI_config.unitframes.show_hots then
     local unitframes = { "player", "target", "focus", "group", "grouptarget", "grouppet", "raid", "ttarget", "pet", "ptarget", "fallback", "tttarget" }
-    local options = { "show_hots", "all_hots", "show_procs", "show_totems", "all_procs", "indicator_time", "indicator_stacks", "indicator_size" }
+    local options = { "show_hots", "all_hots", "show_procs", "show_totems", "all_procs", "indicator_stacks", "indicator_size" }
 
     for _, unitframe in pairs(unitframes) do
       for _, option in pairs(options) do
@@ -1367,11 +1428,6 @@ function pfUI:MigrateConfig()
     end
   end
 
-  -- migrate cooldown font from unit_font to separate setting
-  if checkversion(5, 4, 18) then
-    pfUI_config.appearance.cd.font = pfUI_config.global.font_unit
-  end
-
   -- migrate combopoint size to separate settings
   if checkversion(5, 4, 18) then
     if pfUI_config.unitframes.combosize then
@@ -1381,6 +1437,79 @@ function pfUI:MigrateConfig()
     end
   end
 
+  -- migrate "Always Use 2D Portraits" to the portrait style; keyed on the old
+  -- setting rather than the version, which dev installs stamp as 999.999.999
+  if pfUI_config.unitframes.always2dportrait then
+    if pfUI_config.unitframes.always2dportrait == "1" then
+      pfUI_config.unitframes.portraitstyle = "2d"
+    end
+    pfUI_config.unitframes.always2dportrait = nil
+  end
+
+  -- migrate the scattered cooldown settings into the cooldown table; keyed
+  -- on the old settings rather than the version, like the portrait style
+  local cooldown = pfUI_config.cooldown
+  local cd = pfUI_config.appearance.cd
+  if cd then
+    for _, entry in pairs({ "font", "font_size", "dynamicsize", "threshold", "milliseconds",
+      "lowcolor", "normalcolor", "minutecolor", "hourcolor", "daycolor" }) do
+      cooldown[entry] = cd[entry] or cooldown[entry]
+    end
+
+    cooldown.foreign.text = cd.foreign or cooldown.foreign.text
+    if cd.hideanim then
+      cooldown.foreign.animation = cd.hideanim == "1" and "0" or "1"
+    end
+
+    -- spellbook and character slots took the foreign sweep, and with the
+    -- Blizzard toggle off the foreign numbers too
+    cooldown.blizzard.animation = cooldown.foreign.animation
+    if cd.blizzard == "0" then
+      cooldown.blizzard.text = cooldown.foreign.text
+    end
+
+    -- pfUI drew its own numbers before; the native countdown shows them
+    -- only with this cvar on, which only the first-run setup sets
+    SetCVar("countdownForCooldowns", "1")
+
+    pfUI_config.appearance.cd = nil
+  end
+
+  local function move(config, old, kind, entry)
+    if config[old] then
+      cooldown[kind][entry] = config[old]
+      config[old] = nil
+    end
+  end
+
+  move(pfUI_config.bars, "cooldown_reverse", "actionbar", "reverse")
+  move(pfUI_config.appearance.bags, "cooldown_reverse", "bags", "reverse")
+  move(pfUI_config.buffs, "cooldown_anim", "buff", "animation")
+  move(pfUI_config.buffs, "cooldown_reverse", "buff", "reverse")
+  move(pfUI_config.totems, "cooldown_reverse", "totem", "reverse")
+  move(pfUI_config.nameplates, "debufftext", "nameplate", "text")
+  move(pfUI_config.nameplates, "debuffanim", "nameplate", "animation")
+  move(pfUI_config.nameplates, "debreverse", "nameplate", "reverse")
+
+  if pfUI_config.nameplates.debufftimers == "0" then
+    cooldown.nameplate.text, cooldown.nameplate.animation = "0", "0"
+  end
+
+  -- one setting now covers every unit frame: the target frame's auras and
+  -- the raid frames' indicators stand for the rest
+  move(pfUI_config.unitframes.target, "cooldown_text", "unitframe", "text")
+  move(pfUI_config.unitframes.target, "cooldown_anim", "unitframe", "animation")
+  move(pfUI_config.unitframes.target, "cooldown_reverse", "unitframe", "reverse")
+  move(pfUI_config.unitframes.raid, "indicator_time", "indicator", "text")
+
+  for _, unit in pairs(pfUI_config.unitframes) do
+    if type(unit) == "table" then
+      unit.cooldown_text, unit.cooldown_anim, unit.cooldown_reverse, unit.indicator_time = nil, nil, nil, nil
+    end
+  end
+
+  pfUI_config.nameplates.debufftimers = nil
+  pfUI_config.bars.cd_size = nil
 
   -- Remove "Show only own debuffs" from unitframes and nameplates
   -- (feature was removed; only Target Debuff Bar in buffwatch keeps it)
@@ -1397,5 +1526,17 @@ function pfUI:MigrateConfig()
     end
   end
 
-  pfUI_config.version = pfUI.version.string
+  -- Stamp the version we've migrated to. Dev / git-cloned builds carry
+  -- "@project-version@" in the toc, which pfUI.lua normalizes to "dev" —
+  -- writing that here would have checkversion() parse it back as 0/0/0 on
+  -- the next /reload and re-fire every migration block, clobbering user
+  -- toggles (notably the >3.6.1 buff migration that rewrites
+  -- buffs.{buffs,debuffs,weapons} from the deprecated global.hide{,w}buff
+  -- knobs). Stamp a far-future sentinel instead so checkversion() can't
+  -- flip true again on subsequent loads.
+  if pfUI.version.string == "dev" then
+    pfUI_config.version = "999.999.999"
+  else
+    pfUI_config.version = pfUI.version.string
+  end
 end

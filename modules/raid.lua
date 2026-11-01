@@ -1,10 +1,12 @@
-pfUI:RegisterModule("raid", "vanilla:tbc", function ()
+pfUI:RegisterModule("raid", function ()
   -- do not go further on disabled UFs
   if C.unitframes.disable == "1" then return end
 
   -- tell RaidFrame.lua pfUI replaces party frames
-  HookAddonOrVariable("Blizzard_RaidUI", function()
-    GROUP_REPLACE_PARTY = "1"
+  HookAddon("Blizzard_RaidUI", function()
+    -- must reach _G: RaidFrame.lua reads this global, and pfUI.env has
+    -- __index but no __newindex, so a bare assignment stays in the sandbox
+    _G.GROUP_REPLACE_PARTY = "1"
   end)
 
   pfUI.uf.raid = CreateFrame("Frame", "pfRaidUpdater", UIParent)
@@ -13,10 +15,31 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
   local rawborder, default_border = GetBorderSize("chat")
   local cluster = CreateFrame("Frame", "pfRaidCluster", UIParent)
   cluster:SetFrameLevel(20)
-  cluster:SetWidth(120)
-  cluster:SetHeight(10)
+  cluster:SetSize(120, 10)
   cluster:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", default_border*2, C.chat.left.height + default_border*5)
   UpdateMovable(cluster)
+
+  -- Separate, independently-movable block that mirrors the raid grid layout
+  -- for pet frames (raidpet1..40). Defaults to the right of the raid grid.
+  local petcluster = CreateFrame("Frame", "pfRaidPetCluster", UIParent)
+  petcluster:SetFrameLevel(20)
+  petcluster:SetSize(120, 10)
+  petcluster:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", default_border*2 + 300, C.chat.left.height + default_border*5)
+  UpdateMovable(petcluster)
+
+  -- flat pool of pet frames, laid out by LayoutPets (mirror or collapsed)
+  pfUI.uf.raid.pets = {}
+
+  -- 1-based grid slot -> (row, col) for the current fill direction, matching
+  -- the raid grid's own fill loops.
+  local function SlotToCoord(slot, fill, x, y)
+    slot = slot - 1
+    if fill == "VERTICAL" then
+      return floor(slot / y) + 1, mod(slot, y) + 1
+    else
+      return mod(slot, x) + 1, floor(slot / x) + 1
+    end
+  end
 
   pfUI.uf.raid.tanksfirst = {
     ["PF_TANK_TOGGLE"] = { T["Toggle as Tank"], "toggleTank" }
@@ -28,6 +51,8 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
   function pfUI.uf.raid:UpdateConfig()
     local rawborder, default_border = GetBorderSize("unitframes")
     maxraid = tonumber(C.unitframes.maxraid)
+    local showpets = C.unitframes.raidpet.visible == "1"
+    self.showpets = showpets
 
     for i=1,maxraid do
       pfUI.uf.raid[i] = pfUI.uf.raid[i] or pfUI.uf:CreateUnitFrame("Raid", i, C.unitframes.raid)
@@ -36,6 +61,18 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
 
       pfUI.uf.raid[i]:UpdateConfig()
       pfUI.uf.raid[i]:UpdateFrameSize()
+
+      if showpets then
+        self.pets[i] = self.pets[i] or pfUI.uf:CreateUnitFrame("RaidPet", i, C.unitframes.raidpet, 0.5)
+        self.pets[i]:SetParent(petcluster)
+        self.pets[i]:SetFrameLevel(5)
+        self.pets[i]:UpdateConfig()
+        self.pets[i]:UpdateFrameSize()
+      elseif self.pets[i] then
+        self.pets[i]:UpdateConfig()
+        self.pets[i]:Hide()
+        RemoveMovable(self.pets[i])
+      end
     end
 
     local i = 1
@@ -46,6 +83,17 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
     local fill = pfUI.uf.raid[1].config.raidfill
     local _, _, x, y = string.find(layout,"(.+)x(.+)")
     x, y = tonumber(x), tonumber(y)
+
+    if showpets then
+      local petcfg = C.unitframes.raidpet
+      local _, _, px, py = string.find(petcfg.raidlayout, "(.+)x(.+)")
+      self.petgrid = {
+        fill = petcfg.raidfill, x = tonumber(px), y = tonumber(py),
+        pad = tonumber(petcfg.raidpadding) * GetPerfectPixel(),
+        w = self.pets[1]:GetWidth()+2*default_border,
+        h = self.pets[1]:GetHeight()+2*default_border,
+      }
+    end
 
     if fill == "VERTICAL" then
         for r=1, x do for g=1, y do
@@ -75,6 +123,73 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
           i = i + 1
         end end
     end
+
+    self:LayoutPets()
+
+    self:QueueUpdate(0)
+  end
+
+  function pfUI.uf.raid:LayoutPets()
+    if not self.showpets or not self.petgrid then return end
+    local grid = self.petgrid
+
+    local function place(pet, cell, id)
+      pet.label = "raidpet"
+      pet.id = id
+      local r, g = SlotToCoord(cell, grid.fill, grid.x, grid.y)
+      pet:ClearAllPoints()
+      pet:SetPoint("BOTTOMLEFT", petcluster, "BOTTOMLEFT", (r-1)*(grid.pad+grid.w), (g-1)*(grid.pad+grid.h))
+      UpdateMovable(pet, true)
+      pet:UpdateVisibility()
+    end
+
+    if pfUI.uf.showall then
+      for id = 1, maxraid do
+        if self.pets[id] then place(self.pets[id], id, id) end
+      end
+      return
+    end
+
+    -- Party shown as a raid grid: mirror slots 1..5 (player + party members)
+    -- into fixed cells. UpdateVisibility maps each slot to pet / partypet<N>.
+    if not IsInRaid() and IsInGroup() and C.unitframes.raidforgroup == "1" then
+      for id = 1, maxraid do
+        if self.pets[id] then
+          if id <= 5 then
+            place(self.pets[id], id, id)
+          else
+            self.pets[id].id = 0
+            self.pets[id]:Hide()
+          end
+        end
+      end
+      return
+    end
+
+    if C.unitframes.raidpet.collapse == "1" then
+      -- Pack the pets that exist into the leading cells, no gaps.
+      local k = 0
+      for id = 1, maxraid do
+        if UnitExists("raidpet"..id) and self.pets[k+1] then
+          k = k + 1
+          place(self.pets[k], k, id)
+        end
+      end
+      for j = k+1, maxraid do
+        if self.pets[j] then self.pets[j].id = 0 self.pets[j]:Hide() end
+      end
+    else
+      -- Mirror: cell N always shows raidpet<N> at a fixed position.
+      for id = 1, maxraid do
+        if self.pets[id] then place(self.pets[id], id, id) end
+      end
+    end
+  end
+
+  -- run UpdateRoster after delay; a newer request replaces a pending one
+  function pfUI.uf.raid:QueueUpdate(delay)
+    if self.timer then self.timer:Cancel() end
+    self.timer = C_Timer.NewTimer(delay, function() self:UpdateRoster() end)
   end
 
   pfUI.uf.raid:UpdateConfig()
@@ -85,37 +200,49 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
     frame:UpdateVisibility()
   end
 
-  -- add units to the beginning of their groups
+  -- add units to their groups; collapse packs everyone into the leading slots
   function pfUI.uf.raid:AddUnitToGroup(index, group)
-    for subindex = 1, 5 do
-      local ids = subindex + 5*(group-1)
-      if pfUI.uf.raid[ids] and pfUI.uf.raid[ids].id == 0 and pfUI.uf.raid[ids].config.visible == "1" then
-        SetRaidIndex(pfUI.uf.raid[ids], index)
-        return
+    if C.unitframes.raid.collapse == "1" then
+      for ids = 1, maxraid do
+        if pfUI.uf.raid[ids] and pfUI.uf.raid[ids].id == 0 and pfUI.uf.raid[ids].config.visible == "1" then
+          SetRaidIndex(pfUI.uf.raid[ids], index)
+          return
+        end
+      end
+    else
+      for subindex = 1, 5 do
+        local ids = subindex + 5*(group-1)
+        if pfUI.uf.raid[ids] and pfUI.uf.raid[ids].id == 0 and pfUI.uf.raid[ids].config.visible == "1" then
+          SetRaidIndex(pfUI.uf.raid[ids], index)
+          return
+        end
       end
     end
   end
 
-  pfUI.uf.raid:Hide()
   pfUI.uf.raid:RegisterEvent("RAID_ROSTER_UPDATE")
   pfUI.uf.raid:RegisterEvent("PARTY_MEMBERS_CHANGED")
   pfUI.uf.raid:RegisterEvent("PARTY_LEADER_CHANGED")
   pfUI.uf.raid:RegisterEvent("VARIABLES_LOADED")
+  pfUI.uf.raid:RegisterEvent("UNIT_PET")
   pfUI.uf.raid:SetScript("OnEvent", function()
-    this:Show()
+    if event == "UNIT_PET" then
+      if this.showpets and C.unitframes.raidpet.collapse == "1" then
+        this:LayoutPets()
+      end
+      return
+    end
     -- Debounce: delay update by 0.5s to batch rapid roster changes (mass swaps)
-    this.pendingUpdate = GetTime() + 0.5
+    this:QueueUpdate(.5)
   end)
-  pfUI.uf.raid:SetScript("OnUpdate", function()
-    -- Wait for debounce: don't update until 0.5s after last event
-    if this.pendingUpdate and GetTime() < this.pendingUpdate then return end
-    -- Throttle raid roster updates to 1 FPS max
-    if (this.tick or 0) > GetTime() then return end
-    this.tick = GetTime() + 1.0
-    this.pendingUpdate = nil
 
-    -- don't proceed without raid or during combat
-    if not UnitInRaid("player") or (InCombatLockdown and InCombatLockdown()) then return end
+  function pfUI.uf.raid:UpdateRoster()
+    -- Without a raid there is nothing to sort, but a party shown as a raid
+    -- grid still needs its pet frames placed and mapped to the party pets.
+    if not IsInRaid() then
+      self:LayoutPets()
+      return
+    end
 
     -- clear all existing frames
     for i=1, maxraid do SetRaidIndex(pfUI.uf.raid[i], 0) end
@@ -136,6 +263,8 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
       end
     end
 
+    self:LayoutPets()
+
     -- Smart GUID-based updates: only refresh frames where unit changed
     if pfUI.uf.guidTracker then
       local tracker = pfUI.uf.guidTracker
@@ -144,7 +273,7 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
         local frame = pfUI.uf.raid[i]
         if frame and frame.id and frame.id > 0 then
           local unit = "raid" .. frame.id
-          local newGuid = GetUnitGUID(unit)
+          local newGuid = UnitGUID(unit)
           local oldGuid = tracker.frameToGuid[frame]
           
           if newGuid ~= oldGuid then
@@ -161,9 +290,7 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
     if pfUI.uf.RebuildUnitmap then
       pfUI.uf.RebuildUnitmap()
     end
-
-    this:Hide()
-  end)
+  end
 
   -- raid popup option to toggle tank role
   for _, menu in pairs({"RAID", "PARTY"}) do
@@ -182,7 +309,7 @@ pfUI:RegisterModule("raid", "vanilla:tbc", function ()
 
     if button and pfUI.uf.raid.tanksfirst[button] and name then
       pfUI.uf.raid.tankrole[name] = not pfUI.uf.raid.tankrole[name]
-      pfUI.uf.raid:Show()
+      pfUI.uf.raid:QueueUpdate(0)
     end
   end)
 end)

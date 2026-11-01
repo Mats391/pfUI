@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Turtle Shop", "vanilla", function ()
+pfUI:RegisterSkin("Turtle Shop", function ()
   if not ShopFrame then return end
 
   local rawborder, border = GetBorderSize()
@@ -67,11 +67,7 @@ pfUI:RegisterSkin("Turtle Shop", "vanilla", function ()
   -- ============================================================
   SkinEntryFrames()
 
-  local origOnShow = ShopFrame:GetScript("OnShow")
-  ShopFrame:SetScript("OnShow", function()
-    if origOnShow then origOnShow() end
-    SkinEntryFrames()
-  end)
+  ShopFrame:HookScript("OnShow", SkinEntryFrames)
 
   -- ============================================================
   --  ShopDressUpFrame

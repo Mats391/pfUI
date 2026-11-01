@@ -1,10 +1,8 @@
-pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
+pfUI:RegisterModule("thirdparty", function()
   -- This module includes the core logic of thirdparty modules.
   -- Right now, in particular the functions to register addons to the
   -- dockframe of the chat panel aswell as the thirdparty root-table.
-  -- This module is supposed to be loaded on all expansions, so only
-  -- addons that can share the same glue code across expansions will go here.
-  -- For expansion related code, see: thirdparty-vanilla and thirdparty-tbc.
+  -- For vanilla-specific glue, see: thirdparty-vanilla.
 
   pfUI.thirdparty = {}
 
@@ -76,11 +74,7 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
       -- show/hide right chatframe
       if pfUI.chat and C.chat.right.enable == "1" then
         -- make sure the panel header stays hidden
-        if self.state then
-          pfUI.chat.right.panelTop:Show()
-        else
-          pfUI.chat.right.panelTop:Hide()
-        end
+        pfUI.chat.right.panelTop:SetShown(self.state)
 
         -- set chat visibility
         pfUI.chat.right:SetAlpha(self.state and 1 or 0)
@@ -110,86 +104,33 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
 
   do -- bag sort addon
     pfUI.thirdparty.bagsort = nil
+    -- Third-party sort addons (SortBags, MrPlow, etc.) override pfUI's built-
+    -- in sorter by rebinding the existing pfUI.bag.{right,left}.sort buttons
+    -- created in modules/bags.lua. First-come-first-served — if multiple
+    -- third-party sorters are installed, the first to register wins.
     function pfUI.thirdparty.RegisterBagSort(name, bag, bagtooltip, bank, banktooltip)
-      -- skip on certain conditions
       if pfUI.thirdparty.bagsort then return end
-      if not pfUI.bag or not pfUI.bag.right then return end
+      if not pfUI.bag or not pfUI.bag.right or not pfUI.bag.right.sort then return end
 
       pfUI.thirdparty.bagsort = name
 
-      local rawborder, default_border = GetBorderSize("bags")
+      -- Rebind bag (right) button
+      local rb = pfUI.bag.right.sort
+      rb:SetScript("OnClick", bag)
+      rb:SetScript("OnEnter", function()
+        rb.backdrop:SetBackdropBorderColor(1,1,.25,1)
+        rb.texture:SetVertexColor(1,1,.25,1)
+        if bagtooltip then bagtooltip() end
+      end)
 
-      -- draw the button
-      if not pfUI.bag.right.sort then
-        pfUI.bag.right.sort = CreateFrame("Button", "pfBagSlotSort", UIParent)
-        pfUI.bag.right.sort:SetParent(pfUI.bag.right)
-        pfUI.bag.right.sort:SetPoint("TOPRIGHT", pfUI.bag.right.keys, "TOPLEFT", -default_border*3, 0)
-
-        CreateBackdrop(pfUI.bag.right.sort, default_border)
-        pfUI.bag.right.sort:SetHeight(12)
-        pfUI.bag.right.sort:SetWidth(12)
-        pfUI.bag.right.sort:SetTextColor(1,1,.25,1)
-        pfUI.bag.right.sort:SetFont(pfUI.font_default, C.global.font_size, "OUTLINE")
-        pfUI.bag.right.sort.texture = pfUI.bag.right.sort:CreateTexture("pfBagArrowUp")
-        pfUI.bag.right.sort.texture:SetTexture(pfUI.media["img:sort"])
-        pfUI.bag.right.sort.texture:ClearAllPoints()
-        pfUI.bag.right.sort.texture:SetPoint("TOPLEFT", pfUI.bag.right.sort, "TOPLEFT", 2, -2)
-        pfUI.bag.right.sort.texture:SetPoint("BOTTOMRIGHT", pfUI.bag.right.sort, "BOTTOMRIGHT", -2, 2)
-        pfUI.bag.right.sort.texture:SetVertexColor(.25,.25,.25,1)
-
-        pfUI.bag.right.sort:SetScript("OnClick", bag)
-
-        pfUI.bag.right.sort:SetScript("OnEnter", function ()
-          pfUI.bag.right.sort.backdrop:SetBackdropBorderColor(1,1,.25,1)
-          pfUI.bag.right.sort.texture:SetVertexColor(1,1,.25,1)
-          if bagtooltip then bagtooltip() end
-        end)
-
-        pfUI.bag.right.sort:SetScript("OnLeave", function ()
-          CreateBackdrop(pfUI.bag.right.sort)
-          pfUI.bag.right.sort.texture:SetVertexColor(.25,.25,.25,1)
-          if GameTooltip:IsOwned(this) then
-            GameTooltip:Hide()
-          end
-        end)
-
-        pfUI.bag.right.search:ClearAllPoints()
-        pfUI.bag.right.search:SetPoint("TOPLEFT", pfUI.bag.right, "TOPLEFT", default_border, -default_border)
-        pfUI.bag.right.search:SetPoint("TOPRIGHT", pfUI.bag.right.sort, "TOPLEFT", -default_border*3, -default_border)
-      end
-
-      -- draw the button
-      if not pfUI.bag.left.sort then
-        pfUI.bag.left.sort = CreateFrame("Button", "pfBankSlotSort", UIParent)
-        pfUI.bag.left.sort:SetParent(pfUI.bag.left)
-        pfUI.bag.left.sort:SetPoint("TOPRIGHT", pfUI.bag.left.bags, "TOPLEFT", -default_border*3, 0)
-
-        CreateBackdrop(pfUI.bag.left.sort, default_border)
-        pfUI.bag.left.sort:SetHeight(12)
-        pfUI.bag.left.sort:SetWidth(12)
-        pfUI.bag.left.sort:SetTextColor(1,1,.25,1)
-        pfUI.bag.left.sort:SetFont(pfUI.font_default, C.global.font_size, "OUTLINE")
-        pfUI.bag.left.sort.texture = pfUI.bag.left.sort:CreateTexture("pfBagArrowUp")
-        pfUI.bag.left.sort.texture:SetTexture(pfUI.media["img:sort"])
-        pfUI.bag.left.sort.texture:ClearAllPoints()
-        pfUI.bag.left.sort.texture:SetPoint("TOPLEFT", pfUI.bag.left.sort, "TOPLEFT", 2, -2)
-        pfUI.bag.left.sort.texture:SetPoint("BOTTOMRIGHT", pfUI.bag.left.sort, "BOTTOMRIGHT", -2, 2)
-        pfUI.bag.left.sort.texture:SetVertexColor(.25,.25,.25,1)
-
-        pfUI.bag.left.sort:SetScript("OnClick", bank)
-
-        pfUI.bag.left.sort:SetScript("OnEnter", function ()
-          pfUI.bag.left.sort.backdrop:SetBackdropBorderColor(1,1,.25,1)
-          pfUI.bag.left.sort.texture:SetVertexColor(1,1,.25,1)
+      -- Rebind bank (left) button
+      if pfUI.bag.left and pfUI.bag.left.sort then
+        local lb = pfUI.bag.left.sort
+        lb:SetScript("OnClick", bank)
+        lb:SetScript("OnEnter", function()
+          lb.backdrop:SetBackdropBorderColor(1,1,.25,1)
+          lb.texture:SetVertexColor(1,1,.25,1)
           if banktooltip then banktooltip() end
-        end)
-
-        pfUI.bag.left.sort:SetScript("OnLeave", function ()
-          CreateBackdrop(pfUI.bag.left.sort)
-          pfUI.bag.left.sort.texture:SetVertexColor(.25,.25,.25,1)
-          if GameTooltip:IsOwned(this) then
-            GameTooltip:Hide()
-          end
         end)
       end
     end
@@ -198,7 +139,7 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
   -- MrPlow Bag Sorting Addon.
   -- Vanilla: https://www.wowace.com/projects/mr-plow/files/288059
   -- TBC: https://www.wowace.com/projects/mr-plow/files/136162
-  HookAddonOrVariable("MrPlow", function()
+  HookAddon("MrPlow", function()
     if C.thirdparty.mrplow.enable == "0" then return end
 
     local sort = CreateFrame("Frame", nil)
@@ -234,7 +175,7 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
   -- ShaguDPS Damage Meter
   -- Vanilla: https://github.com/shagu/ShaguDPS
   -- TBC: https://github.com/shagu/ShaguDPS
-  HookAddonOrVariable("ShaguDPS", function()
+  HookAddon("ShaguDPS", function()
     local docktable = { "shagudps", "ShaguDPS", "ShaguDPSWindow",
       function() -- single
         ShaguDPSWindow:ClearAllPoints()
@@ -299,10 +240,10 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
             end
 
             if C.thirdparty.chatbg == "1" and C.chat.global.custombg == "1" then
-              local r, g, b, a = strsplit(",", C.chat.global.background)
+              local r, g, b, a = GetStringColor(C.chat.global.background)
               window.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
 
-              local r, g, b, a = strsplit(",", C.chat.global.border)
+              local r, g, b, a = GetStringColor(C.chat.global.border)
               window.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
             end
 
@@ -332,10 +273,112 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
     end
   end)
 
+  -- GreedMeter Damage Meter
+  -- Vanilla: https://github.com/iGreed/GreedMeter
+  -- GreedMeter builds its windows lazily and supports several of them, so the
+  -- frames are resolved at call time. The primary window takes the "damage"
+  -- dock slot; a second window (GreedMeter.UI.frames[2]) takes the "threat"
+  -- slot so the two tile the panel side-by-side. Docking triggers a
+  -- LayoutBars/RefreshFrame so the bars refit the new width.
+  HookAddon("GreedMeter", function()
+    local UI = GreedMeter.UI
+
+    local function frameAt(i)
+      return UI and UI.frames and UI.frames[i]
+    end
+    local function primary()
+      return (UI and UI.mainFrame) or getglobal("GreedMeterFrame1")
+    end
+    local function relayout(frame)
+      if not UI then return end
+      if UI.LayoutBars then UI:LayoutBars(frame) end
+      if UI.RefreshFrame then UI:RefreshFrame(frame) end
+    end
+
+    -- Builds a docktable for a window resolved through getframe(). left picks
+    -- the left half in split mode; the primary window uses the right half.
+    local function BuildDock(name, getframe, left)
+      return { "greedmeter", "GreedMeter", name,
+        function() -- single: fill the panel
+          local frame = getframe()
+          if not frame then return end
+          frame:ClearAllPoints()
+          frame:SetAllPoints(pfUI.chat.right)
+          frame:SetWidth(pfUI.chat.right:GetWidth())
+          relayout(frame)
+        end,
+        function() -- dual: take one half
+          local frame = getframe()
+          if not frame then return end
+          frame:ClearAllPoints()
+          if left then
+            frame:SetPoint("TOPLEFT", pfUI.chat.right, "TOPLEFT", 0, 0)
+            frame:SetPoint("BOTTOMRIGHT", pfUI.chat.right, "BOTTOM", 0, 0)
+          else
+            frame:SetPoint("TOPLEFT", pfUI.chat.right, "TOP", 0, 0)
+            frame:SetPoint("BOTTOMRIGHT", pfUI.chat.right, "BOTTOMRIGHT", 0, 0)
+          end
+          frame:SetWidth(pfUI.chat.right:GetWidth() / 2)
+          relayout(frame)
+        end,
+        function() -- show
+          local frame = getframe()
+          if frame then frame:Show() relayout(frame) end
+        end,
+        function() -- hide
+          local frame = getframe()
+          if frame then frame:Hide() end
+        end
+      }
+    end
+
+    local threatdock = BuildDock("GreedMeterFrame2", function() return frameAt(2) end, true)
+    pfUI.thirdparty.meters:RegisterMeter("damage", BuildDock("GreedMeterFrame1", primary, false))
+
+    -- pfUI's dock decides fill-vs-split by whether the threat slot is filled,
+    -- not by counting windows, so reconcile that slot whenever GreedMeter adds
+    -- or removes one. Only the first two windows fit; any beyond that float.
+    local function SyncSecond()
+      if not pfUI.thirdparty.meters.damage then return end -- dock disabled
+      local has2 = frameAt(2) ~= nil
+      if has2 and not pfUI.thirdparty.meters.threat then
+        pfUI.thirdparty.meters.threat = threatdock
+      elseif not has2 and pfUI.thirdparty.meters.threat == threatdock then
+        pfUI.thirdparty.meters.threat = nil
+      end
+      pfUI.thirdparty.meters:Resize()
+
+      -- match the second window's visibility to the panel (the primary tracks it)
+      local f1, f2 = primary(), frameAt(2)
+      if f2 then
+        if f1 and f1:IsShown() then f2:Show() relayout(f2) else f2:Hide() end
+      end
+    end
+
+    -- AddFrame and the login-time layout restore both go through
+    -- CreateMeterFrame; RemoveFrame handles closing a window.
+    local origCreate = UI.CreateMeterFrame
+    UI.CreateMeterFrame = function(self, isPrimary, copyFrom)
+      local frame = origCreate(self, isPrimary, copyFrom)
+      SyncSecond()
+      return frame
+    end
+    local origRemove = UI.RemoveFrame
+    UI.RemoveFrame = function(self, frame)
+      origRemove(self, frame)
+      SyncSecond()
+    end
+  end)
+
   -- DPSMate Damage Meter
   -- Vanilla: https://github.com/Geigerkind/DPSMate
   -- TBC: https://github.com/Geigerkind/DPSMateTBC
-  HookAddonOrVariable("DPSMate_DPSMate", function()
+  HookAddon("DPSMate", function()
+    -- DPSMate builds its windows on VARIABLES_LOADED, each named after its
+    -- settings entry, so DPSMate_DPSMate exists only while the first window
+    -- keeps the default name "DPSMate"
+    if not DPSMate_DPSMate then return end
+
     local docktable = { "dpsmate", "DPSMate", "DPSMate_DPSMate",
       function() -- single
         DPSMate_DPSMate:ClearAllPoints()
@@ -405,10 +448,10 @@ pfUI:RegisterModule("thirdparty", "vanilla:tbc", function()
           CreateBackdropShadow(frame)
 
           if C.thirdparty.chatbg == "1" and C.chat.global.custombg == "1" then
-            local r, g, b, a = strsplit(",", C.chat.global.background)
+            local r, g, b, a = GetStringColor(C.chat.global.background)
             frame.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
 
-            local r, g, b, a = strsplit(",", C.chat.global.border)
+            local r, g, b, a = GetStringColor(C.chat.global.border)
             frame.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
           end
         end

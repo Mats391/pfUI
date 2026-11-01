@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Turtle LFT", "vanilla", function ()
+pfUI:RegisterSkin("Turtle LFT", function ()
   -- Only run if the LFT addon is loaded
   if not LFTFrame then return end
 
@@ -33,13 +33,17 @@ pfUI:RegisterSkin("Turtle LFT", "vanilla", function ()
   end
 
   -- tabs
-  SkinTab(LFTFrameTab1)
-  LFTFrameTab1:ClearAllPoints()
-  LFTFrameTab1:SetPoint("TOPLEFT", LFTFrame.backdrop, "BOTTOMLEFT", bpad, -(border + (border == 1 and 1 or 2)))
+  if LFTFrameTab1 then
+    SkinTab(LFTFrameTab1)
+    LFTFrameTab1:ClearAllPoints()
+    LFTFrameTab1:SetPoint("TOPLEFT", LFTFrame.backdrop, "BOTTOMLEFT", bpad, -(border + (border == 1 and 1 or 2)))
+  end
 
-  SkinTab(LFTFrameTab2)
-  LFTFrameTab2:ClearAllPoints()
-  LFTFrameTab2:SetPoint("LEFT", LFTFrameTab1, "RIGHT", border * 2 + 1, 0)
+  if LFTFrameTab2 then
+    SkinTab(LFTFrameTab2)
+    LFTFrameTab2:ClearAllPoints()
+    LFTFrameTab2:SetPoint("LEFT", LFTFrameTab1, "RIGHT", border * 2 + 1, 0)
+  end
 
   -- scrollframe
   StripTextures(LFTFrameScrollFrame)
@@ -163,12 +167,10 @@ pfUI:RegisterSkin("Turtle LFT", "vanilla", function ()
   local sep = LFTGroupReadyFrame:CreateTexture(nil, "ARTWORK")
   sep:SetTexture("Interface\\FrameXML\\LFT\\images\\ui-lfg-separator")
   sep:SetPoint("TOPLEFT", LFTGroupReadyFrame, "TOPLEFT", 10, -125)
-  sep:SetWidth(288)
-  sep:SetHeight(16)
+  sep:SetSize(288, 16)
 
   -- Restore role icon (updated dynamically by LFT_GroupReadyShow)
-  LFTGroupReadyFrameRoleTexture:SetWidth(56)
-  LFTGroupReadyFrameRoleTexture:SetHeight(56)
+  LFTGroupReadyFrameRoleTexture:SetSize(56, 56)
   LFTGroupReadyFrameRoleTexture:ClearAllPoints()
   LFTGroupReadyFrameRoleTexture:SetPoint("LEFT", LFTGroupReadyFrame, "LEFT", 20, -20)
   LFTGroupReadyFrameRoleTexture:Show()

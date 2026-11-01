@@ -20,88 +20,11 @@ local slots = {
   "RangedSlot",
 }
 
-pfUI:RegisterSkin("Inspect", "tbc", function ()
+pfUI:RegisterSkin("Inspect", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
 
-  HookAddonOrVariable("Blizzard_InspectUI", function()
-    CreateBackdrop(InspectFrame, nil, nil, .75)
-    CreateBackdropShadow(InspectFrame)
-
-    InspectFrame.backdrop:SetPoint("TOPLEFT", 10, -10)
-    InspectFrame.backdrop:SetPoint("BOTTOMRIGHT", -30, 72)
-    InspectFrame:SetHitRectInsets(10,30,10,72)
-    EnableMovable("InspectFrame", "Blizzard_InspectUI", INSPECTFRAME_SUBFRAMES)
-
-    SkinCloseButton(InspectFrameCloseButton, InspectFrame.backdrop, -6, -6)
-
-    InspectFrame:DisableDrawLayer("ARTWORK")
-
-    InspectNameText:ClearAllPoints()
-    InspectNameText:SetPoint("TOP", InspectFrame.backdrop, "TOP", 0, -10)
-    InspectGuildText:Show()
-    InspectGuildText:ClearAllPoints()
-    InspectGuildText:SetPoint("TOP", InspectLevelText, "BOTTOM", 0, -1)
-
-    for i = 1, 3 do
-      local tab = _G["InspectFrameTab"..i]
-      local lastTab = _G["InspectFrameTab"..(i-1)]
-      tab:ClearAllPoints()
-      if lastTab then
-        tab:SetPoint("LEFT", lastTab, "RIGHT", border*2 + 1, 0)
-    else
-        tab:SetPoint("TOPLEFT", InspectFrame.backdrop, "BOTTOMLEFT", bpad, -(border + (border == 1 and 1 or 2)))
-      end
-      SkinTab(tab)
-    end
-
-    do -- Character Tab
-      StripTextures(InspectPaperDollFrame)
-
-      EnableClickRotate(InspectModelFrame)
-      local rotL = InspectModelRotateLeftButton or InspectModelFrameRotateLeftButton
-      if rotL then rotL:Hide() end
-      local rotR = InspectModelRotateRightButton or InspectModelFrameRotateRightButton
-      if rotR then rotR:Hide() end
-
-      for _, slot in pairs(slots) do
-        local frame = _G["Inspect"..slot]
-        SkinButton(frame, nil, nil, nil, _G["Inspect"..slot.."IconTexture"], true)
-      end
-
-      hooksecurefunc("InspectPaperDollFrame_OnShow", function()
-        updateRetries = 0
-        local guild, title = GetGuildInfo(InspectFrame.unit)
-        local text = guild and format(TEXT(GUILD_TITLE_TEMPLATE), title, guild) or ""
-        InspectGuildText:SetText(text)
-      end)
-
-      hooksecurefunc("InspectPaperDollItemSlotButton_Update", function(button)
-        local unit = InspectFrame.unit
-        local link = GetInventoryItemLink(unit, button:GetID())
-        if link then
-          local quality = select(3, GetItemInfo(link))
-          button:SetBackdropBorderColor(GetItemQualityColor(quality))
-        else
-          button:SetBackdropBorderColor(pfUI.cache.er, pfUI.cache.eg, pfUI.cache.eb, pfUI.cache.ea)
-        end
-      end)
-    end
-
-    do -- PVP Tab
-      StripTextures(InspectPVPFrame)
-    end
-
-    -- NOTE: Old "InspectTalentFrame" block removed - Turtle WoW replaced it with
-    -- InspectTalentsFrame + TWTalentFrame (handled below in "Turtle WoW Talent Tab")
-  end)
-end)
-
-pfUI:RegisterSkin("Inspect", "vanilla", function ()
-  local rawborder, border = GetBorderSize()
-  local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
-
-  HookAddonOrVariable("Blizzard_InspectUI", function()
+  HookAddon("Blizzard_InspectUI", function()
     local cache = {}
 
     CreateBackdrop(InspectFrame, nil, nil, .75)
@@ -110,7 +33,7 @@ pfUI:RegisterSkin("Inspect", "vanilla", function ()
     InspectFrame.backdrop:SetPoint("TOPLEFT", 10, -10)
     InspectFrame.backdrop:SetPoint("BOTTOMRIGHT", -30, 72)
     InspectFrame:SetHitRectInsets(10,30,10,72)
-    EnableMovable("InspectFrame", "Blizzard_InspectUI", INSPECTFRAME_SUBFRAMES)
+    EnableMovable("InspectFrame", INSPECTFRAME_SUBFRAMES)
 
     SkinCloseButton(InspectFrameCloseButton, InspectFrame.backdrop, -6, -6)
 
@@ -119,7 +42,7 @@ pfUI:RegisterSkin("Inspect", "vanilla", function ()
     InspectNameText:ClearAllPoints()
     InspectNameText:SetPoint("TOP", InspectFrame.backdrop, "TOP", 0, -10)
 
-    -- Turtle WoW has 4 inspect tabs: Character, Honor, Arena, Talents
+    -- Turtle WoW has up to 4 inspect tabs: Character, Honor, Arena, Talents
     for i = 1, 4 do
       local tab = _G["InspectFrameTab"..i]
       if tab then
@@ -137,7 +60,7 @@ pfUI:RegisterSkin("Inspect", "vanilla", function ()
     do -- Character Tab
       StripTextures(InspectPaperDollFrame)
 
-      EnableClickRotate(InspectModelFrame)
+      EnableModelControls(InspectModelFrame)
       local rotL = InspectModelRotateLeftButton or InspectModelFrameRotateLeftButton
       if rotL then rotL:Hide() end
       local rotR = InspectModelRotateRightButton or InspectModelFrameRotateRightButton
@@ -164,82 +87,73 @@ pfUI:RegisterSkin("Inspect", "vanilla", function ()
         end)
       end
 
-      local updateRetries = 0
-      local MAX_RETRIES = 3
+      local function ColorSlot(slot, id, itemID, vslot)
+        local item = Item:CreateFromItemID(itemID)
+        if item:IsItemEmpty() then return end
+
+        item:ContinueOnItemLoad(function()
+          if not InspectFrame.unit then return end
+          if GetInventoryItemID(InspectFrame.unit, id) ~= itemID then return end
+
+          local quality = item:GetItemQuality()
+          if not quality then return end
+
+          local r, g, b = GetItemQualityColor(quality)
+          slot.backdrop:SetBackdropBorderColor(r, g, b)
+
+          if ShaguScore then
+            if not slot.scoreText then
+              slot.scoreText = slot:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+              slot.scoreText:SetFont(pfUI.font_default, 12, "OUTLINE")
+              slot.scoreText:SetPoint("TOPRIGHT", 0, 0)
+            end
+            local itemLevel = ShaguScore.Database[itemID] or 0
+            local score = ShaguScore:Calculate(vslot, quality, itemLevel)
+            if score and score > 0 then
+              slot.scoreText:SetText(score)
+              slot.scoreText:SetTextColor(r, g, b)
+            else
+              slot.scoreText:SetText("")
+            end
+          end
+        end)
+      end
 
       local function UpdateSlots()
-        if not InspectFrame.unit then updateRetries = 0; return end
+        if not InspectFrame.unit then return end
 
-        local guild, title, rank = GetGuildInfo(InspectFrame.unit)
+        local guild, title = GetGuildInfo(InspectFrame.unit)
         if guild then
           InspectGuildText:SetPoint("TOP", InspectLevelText, "BOTTOM", 0, -1)
-          InspectGuildText:SetText(format(TEXT(GUILD_TITLE_TEMPLATE), title, guild))
+          InspectGuildText:SetFormattedText(TEXT(GUILD_TITLE_TEMPLATE), title, guild)
           InspectGuildText:Show()
         else
           InspectGuildText:SetText("")
           InspectGuildText:Hide()
         end
 
-        for i, vslot in pairs(slots) do
+        for _, vslot in pairs(slots) do
           local id = GetInventorySlotInfo(vslot)
-          local link = GetInventoryItemLink(InspectFrame.unit, id)
+          local itemID = GetInventoryItemID(InspectFrame.unit, id)
           local slot = _G["Inspect" .. vslot]
-          local retry = false
 
-          if link and slot.hasItem then
-            local _, _, link = string.find(link, "(item:%d+:%d+:%d+:%d+)")
-            local _, _, quality = GetItemInfo(link)
-
-            if not quality then
-              retry = true
-            else
-              slot.backdrop:SetBackdropBorderColor(GetItemQualityColor(quality))
-
-              if ShaguScore then
-                if not slot.scoreText then
-                  slot.scoreText = slot:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                  slot.scoreText:SetFont(pfUI.font_default, 12, "OUTLINE")
-                  slot.scoreText:SetPoint("TOPRIGHT", 0, 0)
-                end
-
-                local r,g,b = GetItemQualityColor(quality)
-                local _, _, itemID = string.find(link, "item:(%d+):%d+:%d+:%d+")
-                local itemLevel = ShaguScore.Database[tonumber(itemID)] or 0
-                local score = ShaguScore:Calculate(vslot, quality, itemLevel)
-                if score and score > 0 then
-                  slot.scoreText:SetText(score)
-                  slot.scoreText:SetTextColor(r, g, b)
-                else
-                  slot.scoreText:SetText("")
-                end
-              end
-            end
-          elseif slot.hasItem then
-            retry = true
-          else
+          if itemID then
+            ColorSlot(slot, id, itemID, vslot)
+          elseif not slot.hasItem then
+            -- genuinely empty slot: reset to a plain backdrop
             CreateBackdrop(slot)
             SetAllPointsOffset(slot.backdrop, slot, 0)
             if slot.scoreText then
               slot.scoreText:SetText("")
             end
           end
-
-          if retry == true and InspectFrame.unit then
-            if updateRetries < MAX_RETRIES then
-              updateRetries = updateRetries + 1
-              QueueFunction(UpdateSlots)
-            end
-          else
-            updateRetries = 0
-          end
         end
       end
 
       hooksecurefunc("InspectPaperDollItemSlotButton_Update", function(button)
         local bid = button:GetID()
-        local link = GetInventoryItemLink(InspectFrame.unit, bid)
-        if link then
-          local _,_,itemID = string.find(link, 'item:(%d+)')
+        local itemID = GetInventoryItemID(InspectFrame.unit, bid)
+        if itemID then
           cache[bid] = cache[bid] or {}
           cache[bid]["id"] = itemID
           cache[bid]["tex"] = GetInventoryItemTexture(InspectFrame.unit, button:GetID())
@@ -258,45 +172,22 @@ pfUI:RegisterSkin("Inspect", "vanilla", function ()
 
     do -- Honor Tab
       StripTextures(InspectHonorFrame)
+      if InspectArenaFrame then
+        StripTextures(InspectArenaFrame)
+        for i = 1, 3 do
+          local team = _G["InspectArenaFrameTeam"..i]
+          StripTextures(team)
+          CreateBackdrop(team)
+        end
+      end
 
       CreateBackdrop(InspectHonorFrameProgressBar)
       InspectHonorFrameProgressBar:SetStatusBarTexture(pfUI.media["img:bar"])
       InspectHonorFrameProgressBar:SetHeight(24)
     end
 
-    do -- Turtle WoW Talent Tab (TWTalentFrame)
-      if TWTalentFrame then
-        StripTextures(TWTalentFrame)
-
-        StripTextures(TWTalentFrameScrollFrame)
-        SkinScrollbar(TWTalentFrameScrollFrameScrollBar)
-
-        for i = 1, (MAX_NUM_TALENTS or 100) do
-          local talent = _G["TWTalentFrameTalent"..i]
-          if talent then
-            StripTextures(talent)
-            SkinButton(talent, nil, nil, nil, _G["TWTalentFrameTalent"..i.."IconTexture"])
-            local rank = _G["TWTalentFrameTalent"..i.."Rank"]
-            if rank then
-              rank:SetFont(pfUI.font_default, C.global.font_size, "OUTLINE")
-            end
-          end
-        end
-
-        for i = 1, 3 do
-          local tab = _G["TWTalentFrameTab"..i]
-          if tab then
-            SkinTab(tab)
-            tab:ClearAllPoints()
-            local lastTab = _G["TWTalentFrameTab"..(i-1)]
-            if lastTab then
-              tab:SetPoint("LEFT", lastTab, "RIGHT", border*2 + 1, 0)
-            else
-              tab:SetPoint("TOPLEFT", TWTalentFrame, "TOPLEFT", 70, -3)
-            end
-          end
-        end
-      end
-    end
+    -- NOTE: Turtle WoW's Talent tab (InspectTalentsFrame / TWTalentFrame) is
+    -- skinned in modules/turtle-wow.lua, which activates once this skin is
+    -- registered (it gates on pfUI.skin["Inspect"]).
   end)
 end)

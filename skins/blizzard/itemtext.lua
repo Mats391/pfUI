@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Books", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Books", function ()
   StripTextures(ItemTextFrame)
   CreateBackdrop(ItemTextFrame, nil, nil, .75)
   CreateBackdropShadow(ItemTextFrame)
@@ -76,8 +76,8 @@ pfUI:RegisterSkin("Books", "vanilla:tbc", function ()
     ItemTextScrollFrameScrollBarScrollUpButton:Show()
     ItemTextScrollFrameScrollBarScrollDownButton:Show()
 
-    ItemTextScrollFrame.Show = function(self) end
-    ItemTextScrollFrame.Hide = function(self) end
+    ItemTextScrollFrame.Show = nop
+    ItemTextScrollFrame.Hide = nop
     ItemTextScrollFrameScrollBar.Show = function(self) self.thumb:Show() end
     ItemTextScrollFrameScrollBar.Hide = function(self) self.thumb:Hide() end
     ItemTextScrollFrameScrollBarScrollUpButton.Show = function(self) if self:GetParent():GetValue() ~= 0 then self:Enable() end end
@@ -86,7 +86,7 @@ pfUI:RegisterSkin("Books", "vanilla:tbc", function ()
     ItemTextScrollFrameScrollBarScrollDownButton.Hide = function(self) self:Disable() end
 
     local first
-    HookScript(ItemTextFrame, "OnShow", function()
+    ItemTextFrame:HookScript("OnShow", function()
       if not first then -- it is necessary to update the scrollbar when you first open the frame
         ItemTextScrollFrameScrollBar:Show()
         ItemTextScrollFrameScrollBar:Hide()

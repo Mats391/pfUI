@@ -1,4 +1,4 @@
-pfUI:RegisterModule("map", "vanilla:tbc", function ()
+pfUI:RegisterModule("map", function ()
   table.insert(UISpecialFrames, "WorldMapFrame")
 
   local function UpdateTooltipScale()
@@ -25,17 +25,17 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
   pfUI.map = { UpdateConfig = UpdateTooltipScale }
 
   function _G.ToggleWorldMap()
-    if WorldMapFrame:IsShown() then
-      WorldMapFrame:Hide()
-    else
-      WorldMapFrame:Show()
-    end
+    WorldMapFrame:SetShown(not WorldMapFrame:IsShown())
   end
 
   C.position["WorldMapFrame"] = C.position["WorldMapFrame"] or { alpha = 1.0, scale = 0.7 }
   C.position["WorldMapFrame"].parent = nil
   local alpha = C.position["WorldMapFrame"].alpha
   local scale = C.position["WorldMapFrame"].scale
+
+  -- the hooks go on once, however often the loader runs: turtle-wow.lua also
+  -- calls it, outside of an event
+  local hooked
 
   local pfMapLoader = CreateFrame("Frame")
   pfMapLoader:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -50,11 +50,10 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
     WorldMapFrame:EnableMouse(true)
     WorldMapFrame:RegisterForDrag("LeftButton")
 
-    -- make sure the hooks get only applied once
-    if not this.hooked then
-      this.hooked = true
+    if not hooked then
+      hooked = true
 
-      HookScript(WorldMapFrame, "OnShow", function()
+      WorldMapFrame:HookScript("OnShow", function()
         -- customize
         this:EnableKeyboard(false)
         this:EnableMouseWheel(1)
@@ -66,22 +65,28 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
         pfOrigSetMapToCurrentZone()
       end)
 
-      HookScript(WorldMapFrame, "OnMouseWheel", function()
+      WorldMapFrame:HookScript("OnMouseWheel", function()
         if IsShiftKeyDown() then
-          alpha = clamp(WorldMapFrame:GetAlpha() + arg1/10, 0.1, 1.0)
+          alpha = Clamp(WorldMapFrame:GetAlpha() + arg1/10, 0.1, 1.0)
           WorldMapFrame:SetAlpha(alpha)
         end
 
         if IsControlKeyDown() then
           local oldscale = WorldMapFrame:GetScale()
           local point, rel, relpoint, offx, offy = WorldMapFrame:GetPoint()
-          scale = clamp(oldscale + arg1/10, 0.1, 2.0)
+          scale = Clamp(oldscale + arg1/10, 0.1, 2.0)
 
           -- recalculate world frame position based on old and new scale
           if point == "TOPLEFT" and relpoint == "TOPLEFT" then
             offx = offx*oldscale/scale
             offy = offy*oldscale/scale
-            WorldMapFrame:SetPoint(point, rel, relpoint, offx, offy)
+            -- Anchor to the parent (3-arg SetPoint) rather than re-using the frame
+            -- GetPoint handed back. Re-anchoring to `rel` throws
+            -- "<unnamed> is dependent on this" as soon as anything else has anchored
+            -- itself to WorldMapFrame, which aborts the whole zoom handler. The
+            -- parent-relative form is also what LoadMovable/SaveMovable already
+            -- assume: SaveMovable stores only xpos/ypos, with no relative frame.
+            WorldMapFrame:SetPoint(point, offx, offy)
           end
 
           WorldMapFrame:SetScale(scale)
@@ -91,11 +96,11 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
         SaveMovable(this, true)
       end)
 
-      HookScript(WorldMapFrame, "OnDragStart", function()
+      WorldMapFrame:HookScript("OnDragStart", function()
         WorldMapFrame:StartMoving()
       end)
 
-      HookScript(WorldMapFrame, "OnDragStop",function()
+      WorldMapFrame:HookScript("OnDragStop",function()
         WorldMapFrame:StopMovingOrSizing()
         SaveMovable(this, true)
       end)
@@ -107,8 +112,8 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
 
     WorldMapFrame:ClearAllPoints()
     WorldMapFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-    WorldMapFrame:SetWidth(WorldMapButton:GetWidth() + 15)
-    WorldMapFrame:SetHeight(WorldMapButton:GetHeight() + 55)
+    local wmWidth, wmHeight = WorldMapButton:GetSize()
+    WorldMapFrame:SetSize(wmWidth + 15, wmHeight + 55)
     LoadMovable(WorldMapFrame)
 
     -- skin
@@ -130,8 +135,7 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
       btn:SetHighlightTexture("")
       btn.text = _G["pfUI_map_autozoneswitchText"]
       CreateBackdrop(btn, nil, true)
-      btn:SetWidth(14)
-      btn:SetHeight(14)
+      btn:SetSize(14, 14)
       btn:SetPoint("RIGHT", WorldMapContinentDropDown, "LEFT", -8, 2)
       btn.text:ClearAllPoints()
       btn.text:SetPoint("RIGHT", btn, "LEFT", -4, 1)
@@ -169,8 +173,7 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
       WorldMapButton.coords.text:SetJustifyH("RIGHT")
 
       WorldMapButton.coords:SetScript("OnUpdate", function()
-        local width  = WorldMapButton:GetWidth()
-        local height = WorldMapButton:GetHeight()
+        local width, height = WorldMapButton:GetSize()
         local mx, my = WorldMapButton:GetCenter()
         local scale  = WorldMapButton:GetEffectiveScale()
         local x, y   = GetCursorPosition()
@@ -180,8 +183,8 @@ pfUI:RegisterModule("map", "vanilla:tbc", function ()
           my = (( my + height / 2 ) - ( y / scale )) / height * 100
         end
 
-        if mx and my and MouseIsOver(WorldMapButton) then
-          WorldMapButton.coords.text:SetText(string.format('%.1f / %.1f', mx, my))
+        if mx and my and WorldMapButton:IsMouseOver() then
+          WorldMapButton.coords.text:SetFormattedText('%.1f / %.1f', mx, my)
         else
           WorldMapButton.coords.text:SetText("")
         end

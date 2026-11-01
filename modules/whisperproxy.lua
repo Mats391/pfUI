@@ -1,10 +1,9 @@
-pfUI:RegisterModule("whisperproxy", "vanilla", function ()
+pfUI:RegisterModule("whisperproxy", function ()
   if not pfUI.chat then return end
 
   local proxy = CreateFrame("Button", "pfWhisperProxy", pfUI.chat.left.panelTop)
   proxy:SetPoint("TOPRIGHT", pfUI.chat.left, "TOPRIGHT", -22, -5)
-  proxy:SetWidth(12)
-  proxy:SetHeight(12)
+  proxy:SetSize(12, 12)
   proxy.tex = proxy:CreateTexture(nil, "OVERLAY")
   proxy.tex:SetAllPoints()
   proxy.tex:SetTexture(pfUI.media["img:proxy"])

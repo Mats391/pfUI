@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Spellbook", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Spellbook", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
 
@@ -6,9 +6,9 @@ pfUI:RegisterSkin("Spellbook", "vanilla:tbc", function ()
   CreateBackdrop(SpellBookFrame, nil, nil, .75)
   CreateBackdropShadow(SpellBookFrame)
 
-  SpellBookFrame.backdrop:SetPoint("TOPLEFT", 12, -12)
+  SpellBookFrame.backdrop:SetPoint("TOPLEFT", 10, -10)
   SpellBookFrame.backdrop:SetPoint("BOTTOMRIGHT", -30, 72)
-  SpellBookFrame:SetHitRectInsets(12,30,12,72)
+  SpellBookFrame:SetHitRectInsets(10,30,10,72)
   EnableMovable(SpellBookFrame)
 
   SpellBookTitleText:ClearAllPoints()
@@ -32,6 +32,14 @@ pfUI:RegisterSkin("Spellbook", "vanilla:tbc", function ()
 
     StripTextures(button)
     SkinButton(button, nil, nil, nil, texture)
+
+    -- native cooldown frame in place of the template's indicator Model.
+    -- SpellButton_UpdateButton reads the "<button>Cooldown" global on every
+    -- update. 1.12 binds a frame's name only while that global is unset, so
+    -- the global is rebound by hand; the Model starts hidden and nothing
+    -- reaches it after that
+    local cdname = "SpellButton"..i.."Cooldown"
+    _G[cdname] = CreateCooldown(button, "blizzard", cdname)
 
     _G["SpellButton"..i.."SubSpellName"]:SetTextColor(1, 1, 1)
     _G["SpellButton"..i.."AutoCastable"]:SetTexture("Interface\\Buttons\\UI-AutoCastableOverlay")

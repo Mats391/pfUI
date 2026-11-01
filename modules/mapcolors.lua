@@ -34,9 +34,8 @@ pfUI:RegisterModule("mapcolors", function ()
 
   local function GetTextureColor(frame)
     if UnitExists(frame.unit) then
-      local _, class = UnitClass(frame.unit)
-      local color = RAID_CLASS_COLORS[class]
-      return color.r, color.g, color.b
+      local _, r, g, b = GetUnitColor(frame.unit)
+      return r, g, b
     else
       return .5, 1, .5
     end
@@ -51,7 +50,7 @@ pfUI:RegisterModule("mapcolors", function ()
   end
 
   local function UpdateUnitFrames(unit_button_name)
-    if GetNumRaidMembers() > 0 then
+    if IsInRaid() then
       for i=1, MAX_RAID_MEMBERS do
         local frame_name = unit_button_name.."Raid"..i
         local frame = _G[frame_name]
@@ -69,7 +68,7 @@ pfUI:RegisterModule("mapcolors", function ()
           end
         end
       end
-    elseif GetNumPartyMembers() > 0 then
+    elseif IsInGroup() then
       for i=1, MAX_PARTY_MEMBERS do
         local frame_name = unit_button_name.."Party"..i
         local frame = _G[frame_name]
@@ -86,8 +85,8 @@ pfUI:RegisterModule("mapcolors", function ()
   end
 
   local function ColorizeName(frame)
-    local _, class = UnitClass(frame.unit)
-    local color = RAID_CLASS_COLORS[class]
+    local class = UnitClassBase(frame.unit)
+    local color = PFUI_CLASS_COLORS[class]
     frame.name = frame.name or UnitName(frame.unit)
     frame.name = '|c'..color.colorStr..frame.name..'|r'
   end
@@ -96,7 +95,7 @@ pfUI:RegisterModule("mapcolors", function ()
     local tooltipText = ""
     if unit_button_name == 'WorldMap' then
       -- check player
-      if MouseIsOver(WorldMapPlayer) then
+      if WorldMapPlayer:IsMouseOver() then
         ColorizeName(WorldMapPlayer)
         tooltipText = WorldMapPlayer.name
       end
@@ -105,7 +104,7 @@ pfUI:RegisterModule("mapcolors", function ()
     -- check party
     for i=1, MAX_PARTY_MEMBERS do
       local frame = _G[unit_button_name.."Party"..i]
-      if frame:IsVisible() and MouseIsOver(frame) then
+      if frame:IsVisible() and frame:IsMouseOver() then
         ColorizeName(frame)
         tooltipText = tooltipText.."\n"..frame.name
       end
@@ -114,7 +113,7 @@ pfUI:RegisterModule("mapcolors", function ()
     --check Raid
     for i=1, MAX_RAID_MEMBERS do
       local frame = _G[unit_button_name.."Raid"..i]
-      if frame:IsVisible() and MouseIsOver(frame) then
+      if frame:IsVisible() and frame:IsMouseOver() then
         ColorizeName(frame)
         tooltipText = tooltipText.."\n"..frame.name
       end
@@ -139,7 +138,7 @@ pfUI:RegisterModule("mapcolors", function ()
   end
 
   -- BattlefieldMinimap
-  HookAddonOrVariable("Blizzard_BattlefieldMinimap", function()
+  HookAddon("Blizzard_BattlefieldMinimap", function()
     Initialize('BattlefieldMinimap')
 
     hooksecurefunc('BattlefieldMinimap_OnUpdate', function()

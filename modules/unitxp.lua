@@ -1,8 +1,8 @@
 -- UnitXP_SP3 integration module
--- Provides Line of Sight indicator, OS notifications, and enhanced targeting
+-- Provides behind and distance indicators, OS notifications, and enhanced targeting
 -- Requires UnitXP_SP3 DLL: https://github.com/allfoxwy/UnitXP_SP3
 
-pfUI:RegisterModule("unitxp", "vanilla", function ()
+pfUI:RegisterModule("unitxp", function ()
   -- Check if UnitXP is available
   local hasUnitXP = pcall(UnitXP, "nop", "nop")
   if not hasUnitXP then return end
@@ -15,7 +15,7 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
 
     local h = pfUI.uf.target:GetHeight() or 30
     local slot = h / 3  -- divide frame into thirds
-    local fontSize = tonumber(C.unitframes.unitxp_font_size) or (C.global.font_size + 2)
+    local fontSize = tonumber(C.unitframes.indicator_font_size) or (C.global.font_size + 2)
     local suffix = (C.unitframes.hide_distance_yd == "1") and "" or " yd"
 
     -- Behind Indicator for all units (MIDDLE)
@@ -28,7 +28,7 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
       behindFrame.text:SetFont(pfUI.font_default, fontSize, "OUTLINE")
       behindFrame.text:SetPoint("RIGHT", behindFrame, "RIGHT", -1, 0)
       behindFrame.text:SetTextColor(0.3, 1, 0.3, 1)
-      behindFrame.text:SetText("BEHIND")
+      behindFrame.text:SetText(T["BEHIND"])
       behindFrame.text:Hide()
 
       local lastCheck = 0
@@ -42,48 +42,10 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
         end
 
         local success, behind = pcall(UnitXP, "behind", "player", "target")
-        if success and behind then
-          this.text:Show()
-        else
-          this.text:Hide()
-        end
+        this.text:SetShown(success and behind)
       end)
 
       pfUI.uf.target.behindIndicator = behindFrame
-    end
-
-    -- Line of Sight Indicator on Target Frame (BELOW BEHIND)
-    if C.unitframes.los_indicator == "1" and not pfUI.uf.target.losIndicator then
-      local losFrame = CreateFrame("Frame", "pfLoSIndicator", pfUI.uf.target)
-      losFrame:SetAllPoints(pfUI.uf.target)
-      losFrame:SetFrameLevel(pfUI.uf.target:GetFrameLevel() + 10)
-
-      losFrame.text = losFrame:CreateFontString(nil, "OVERLAY")
-      losFrame.text:SetFont(pfUI.font_default, fontSize, "OUTLINE")
-      losFrame.text:SetPoint("RIGHT", losFrame, "RIGHT", -1, -slot)
-      losFrame.text:SetTextColor(1, 0.3, 0.3, 1)
-      losFrame.text:SetText("NO LOS")
-      losFrame.text:Hide()
-
-      local lastCheck = 0
-      losFrame:SetScript("OnUpdate", function()
-        if GetTime() - lastCheck < 0.2 then return end
-        lastCheck = GetTime()
-
-        if not UnitExists("target") then
-          this.text:Hide()
-          return
-        end
-
-        local success, inSight = pcall(UnitXP, "inSight", "player", "target")
-        if success and inSight == false then
-          this.text:Show()
-        else
-          this.text:Hide()
-        end
-      end)
-
-      pfUI.uf.target.losIndicator = losFrame
     end
 
     -- Distance Indicator
@@ -134,7 +96,7 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
           end
 
           this.text:SetTextColor(r, g, b, 1)
-          this.text:SetText(string.format("%.1f%s", distance, suffix))
+          this.text:SetFormattedText("%.1f%s", distance, suffix)
           this.text:Show()
         end)
 
@@ -169,6 +131,9 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
 
           local throttle = 0
           local scanner = CreateFrame("Frame")
+          -- expose the poller frame so PLAYER_LOGOUT can stop its UnitXP OnUpdate
+          -- (it lives on this separate frame, not on distanceIndicator) -> crash 132
+          pfUI.uf.target.distanceScanner = scanner
           scanner:SetScript("OnUpdate", function()
             throttle = throttle + arg1
             if throttle < 0.05 then return end
@@ -190,9 +155,7 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
               return
             end
 
-            local successL, inSight = pcall(UnitXP, "inSight", "player", "target")
-            local alpha = (successL and inSight == false) and 0.5 or 1.0
-            f.text:SetAlpha(alpha)
+            f.text:SetAlpha(UnitInLineOfSight("target") == false and 0.5 or 1.0)
 
             local r, g, b = 1.0, 0.2, 0.2
             for i = 1, table.getn(thresholds) do
@@ -203,7 +166,7 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
             end
 
             f.text:SetTextColor(r, g, b, 1)
-            f.text:SetText(string.format("%.1f%s", distance, suffix))
+            f.text:SetFormattedText("%.1f%s", distance, suffix)
           end)
         end
         pfUI.uf.target.distanceIndicator = pfRangeDisplay
@@ -230,11 +193,12 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
         if pfUI.uf.target.behindIndicator then
           pfUI.uf.target.behindIndicator:SetScript("OnUpdate", nil)
         end
-        if pfUI.uf.target.losIndicator then
-          pfUI.uf.target.losIndicator:SetScript("OnUpdate", nil)
-        end
         if pfUI.uf.target.distanceIndicator then
           pfUI.uf.target.distanceIndicator:SetScript("OnUpdate", nil)
+        end
+        -- free-frame mode polls from its own scanner frame, not the indicator
+        if pfUI.uf.target.distanceScanner then
+          pfUI.uf.target.distanceScanner:SetScript("OnUpdate", nil)
         end
       end
       return
@@ -246,29 +210,21 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
 
   -- OS Notification Support
   if C.unitframes.unitxp_notify == "1" then
-    local notifyFrame = CreateFrame("Frame")
-    notifyFrame:RegisterEvent("CHAT_MSG_WHISPER")
-    notifyFrame:RegisterEvent("CHAT_MSG_BN_WHISPER")
-    notifyFrame:RegisterEvent("READY_CHECK")
-    notifyFrame:RegisterEvent("RAID_INSTANCE_WELCOME")
-    notifyFrame:RegisterEvent("PLAYER_LOGOUT")
-
-    notifyFrame:SetScript("OnEvent", function()
-      -- Handle shutdown to prevent crash 132
-      if event == "PLAYER_LOGOUT" then
-        this:UnregisterAllEvents()
-        this:SetScript("OnEvent", nil)
-        return
-      end
-      
+    local function Notify()
       pcall(UnitXP, "notify", "taskbarIcon")
       pcall(UnitXP, "notify", "systemSound")
-    end)
+    end
+
+    for _, event in ipairs({ "CHAT_MSG_WHISPER", "READY_CHECK" }) do
+      pfUI.events:RegisterFrameEventAndCallback(event, Notify)
+    end
 
     -- Also notify on BG queue pop
     local origBattlefieldPortShow = BattlefieldFrame_Show
     if origBattlefieldPortShow then
-      BattlefieldFrame_Show = function()
+      -- pfUI.env has __index but no __newindex, so a bare global assignment
+      -- inside a RegisterModule closure never leaves the sandbox
+      _G.BattlefieldFrame_Show = function()
         pcall(UnitXP, "notify", "taskbarIcon")
         pcall(UnitXP, "notify", "systemSound")
         return origBattlefieldPortShow()
@@ -331,29 +287,8 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
     return success and found
   end
 
-  pfUI.api.UnitInLineOfSight = function(unit1, unit2)
-    if not unit2 then
-      unit2 = unit1
-      unit1 = "player"
-    end
-    local success, inSight = pcall(UnitXP, "inSight", unit1, unit2)
-    if success then return inSight end
-    return nil
-  end
-
-  pfUI.api.UnitIsBehind = function(unit1, unit2)
-    if not unit2 then
-      unit2 = unit1
-      unit1 = "player"
-    end
-    local success, behind = pcall(UnitXP, "behind", unit1, unit2)
-    if success then return behind end
-    return nil
-  end
-
   -- Debug command to test UnitXP indicators
-  SLASH_PFUNITXP1 = "/pfunitxp"
-  SlashCmdList["PFUNITXP"] = function()
+  pfUI.api.RegisterSlashCommand("PFUNITXP", { "/pfunitxp" }, function()
     local chat = DEFAULT_CHAT_FRAME
     chat:AddMessage("|cff33ffccpfUI|r: UnitXP Indicator Debug")
 
@@ -367,10 +302,6 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
     local successB, behind = pcall(UnitXP, "behind", "player", "target")
     chat:AddMessage("  Behind check: success=" .. tostring(successB) .. " value=" .. tostring(behind) .. " type=" .. type(behind))
 
-    -- Test LOS
-    local successL, inSight = pcall(UnitXP, "inSight", "player", "target")
-    chat:AddMessage("  LOS check: success=" .. tostring(successL) .. " value=" .. tostring(inSight) .. " type=" .. type(inSight))
-
     -- Check if indicator frames exist
     if pfUI.uf and pfUI.uf.target then
       chat:AddMessage("  Target frame: |cff00ff00exists|r")
@@ -379,13 +310,8 @@ pfUI:RegisterModule("unitxp", "vanilla", function ()
       else
         chat:AddMessage("  Behind indicator: |cffff0000NOT created|r (check settings)")
       end
-      if pfUI.uf.target.losIndicator then
-        chat:AddMessage("  LOS indicator: |cff00ff00created|r")
-      else
-        chat:AddMessage("  LOS indicator: |cffff0000NOT created|r (check settings)")
-      end
     else
       chat:AddMessage("  Target frame: |cffff0000NOT found|r")
     end
-  end
+  end, true)
 end)

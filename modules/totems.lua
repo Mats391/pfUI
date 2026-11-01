@@ -1,67 +1,53 @@
-pfUI:RegisterModule("totems", "vanilla:tbc", function ()
-  local _, class = UnitClass("player")
-
-  local slots = {
-    [FIRE_TOTEM_SLOT]  = { r = .5, g = .2, b = .1 },
-    [EARTH_TOTEM_SLOT] = { r = .2, g = .4, b = .1 },
-    [WATER_TOTEM_SLOT] = { r = .1, g = .4, b = .6 },
-    [AIR_TOTEM_SLOT]   = { r = .4, g = .1, b = .7 },
+pfUI:RegisterModule("totems", function ()
+  local slotColors = {
+    [FIRE_TOTEM_SLOT]  = CreateColor(.5, .2, .1),
+    [EARTH_TOTEM_SLOT] = CreateColor(.2, .4, .1),
+    [WATER_TOTEM_SLOT] = CreateColor(.1, .4, .6),
+    [AIR_TOTEM_SLOT]   = CreateColor(.4, .1, .7),
   }
 
   local totems = CreateFrame("Frame", "pfTotems", UIParent)
   totems:RegisterEvent("PLAYER_TOTEM_UPDATE")
   totems:RegisterEvent("PLAYER_ENTERING_WORLD")
-  totems:SetScript("OnEvent", function(self)
-    totems:RefreshList()
+  totems:SetScript("OnEvent", function()
+    this:RefreshList()
   end)
 
-  if pfUI.client <= 11200 and class == "SHAMAN" then
-    -- there's no totem event in vanilla using ticks instead
-    local eventemu = CreateFrame("Frame")
-    eventemu:SetScript("OnUpdate", function()
-      if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + .5 end
-      totems:RefreshList()
-    end)
-  end
-
   totems.OnEnter = function(self)
-    if not this.id then return end
-    local active, name, start, duration, icon = GetTotemInfo(this.id)
-    if not name or not active then return end  -- Prüfen ob name gültig ist
-    local color = slots[this.id]
+    local id = this:GetID()
+    local spellID = select(7, GetTotemInfo(id))
+    if not spellID or spellID == 0 then return end
     GameTooltip:SetOwner(this, "ANCHOR_LEFT")
-    GameTooltip:SetText(name, color.r+.2, color.g+.2, color.b+.2)
+    GameTooltip:SetSpellByID(spellID)
+    GameTooltip:AddDoubleLine(T["Left Click"], T["Recast Totem"], nil, nil, nil, WHITE_FONT_COLOR:GetRGB())
+    GameTooltip:AddDoubleLine(T["Right Click"], T["Target Totem"], nil, nil, nil, WHITE_FONT_COLOR:GetRGB())
     GameTooltip:Show()
-end
-
-  totems.OnLeave = function(self)
-    GameTooltip:Hide()
   end
+
+  totems.OnLeave = GameTooltip_Hide
 
   totems.OnClick = function(self)
-    if pfUI.client <= 11200 and this.id and arg1 and arg1 == "LeftButton" then
-      -- Try to recast totem on left click in vanilla
-      local active, name, start, duration, icon = GetTotemInfo(this.id)
-      if name then CastSpellByName(name) end
-    elseif pfUI.client > 11200 and this.id and arg1 and arg1 == "RightButton" then
-      -- Try to cancel totem on right click in tbc+
-      DestroyTotem(this.id)
+    local id = this:GetID()
+    if arg1 == "LeftButton" then
+      local spellID = select(7, GetTotemInfo(id))
+      if spellID and spellID > 0 then CastSpell(FindSpellBookSlotByID(spellID)) end
+    elseif arg1 == "RightButton" then
+      TargetTotem(id)
     end
   end
 
   totems.RefreshList = function(self)
     local count = 0
     for i = 1, MAX_TOTEMS do
-      local active, name, start, duration, icon = GetTotemInfo(i)
+      local _, _, start, duration, icon = GetTotemInfo(i)
 
-      if active and icon and icon ~= "" then
+      if start and start > 0 and icon and icon ~= "" then
         count = count + 1
-        local color = slots[i]
 
         self.bar[count]:Show()
-        self.bar[count]:SetBackdropBorderColor(color.r, color.g, color.b)
+        self.bar[count]:SetBackdropBorderColor(slotColors[i]:GetRGB())
         self.bar[count].icon:SetTexture(icon)
-        self.bar[count].id = i
+        self.bar[count]:SetID(i)
 
         CooldownFrame_SetTimer(self.bar[count].cd, start, duration, 1)
       end
@@ -80,14 +66,14 @@ end
       self:Show()
     end
 
-    local count = count and count > 0 and count or MAX_TOTEMS
+    count = count and count > 0 and count or MAX_TOTEMS
 
+    local thickness = self.iconsize + self.spacing*2
+    local length = thickness * count
     if pfUI_config.totems.direction == "HORIZONTAL" then
-      self:SetHeight(self.iconsize + self.spacing*2)
-      self:SetWidth(self.spacing*2 + self.iconsize + (count-1)*(self.iconsize + self.spacing*2))
+      self:SetSize(length, thickness)
     else
-      self:SetWidth(self.iconsize + self.spacing*2)
-      self:SetHeight(self.spacing*2 + self.iconsize + (count-1)*(self.iconsize + self.spacing*2))
+      self:SetSize(thickness, length)
     end
   end
 
@@ -117,8 +103,7 @@ end
         end
       end
 
-      self.bar[i]:SetHeight(self.iconsize)
-      self.bar[i]:SetWidth(self.iconsize)
+      self.bar[i]:SetSize(self.iconsize, self.iconsize)
       CreateBackdrop(self.bar[i], nil, true)
 
       self.bar[i].icon = self.bar[i].icon or self.bar[i]:CreateTexture(nil, "ARTWORK")
@@ -126,12 +111,9 @@ end
       SetAllPointsOffset(self.bar[i].icon, self.bar[i], 2,-2)
 
       self.bar[i].cdbg = self.bar[i].cdbg or CreateFrame("Frame", nil, self.bar[i])
-      self.bar[i].cdbg:SetHeight(self.iconsize - 3)
-      self.bar[i].cdbg:SetWidth(self.iconsize - 3)
+      self.bar[i].cdbg:SetSize(self.iconsize - 3, self.iconsize - 3)
       self.bar[i].cdbg:SetPoint("CENTER", self.bar[i], "CENTER", 0, 0)
-      self.bar[i].cd = self.bar[i].cd or CreateFrame(COOLDOWN_FRAME_TYPE, "pfTotemsBar"..i.."Cooldown", self.bar[i].cdbg, "CooldownFrameTemplate")
-      self.bar[i].cd.pfCooldownStyleAnimation = 1
-      self.bar[i].cd.pfCooldownType = "ALL"
+      self.bar[i].cd = self.bar[i].cd or CreateCooldown(self.bar[i].cdbg, "totem", "pfTotemsBar"..i.."Cooldown")
 
       self.bar[i]:RegisterForClicks("LeftButtonUp", "RightButtonUp")
       self.bar[i]:SetScript("OnClick", self.OnClick)

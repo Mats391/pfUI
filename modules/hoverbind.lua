@@ -1,4 +1,4 @@
-pfUI:RegisterModule("hoverbind", "vanilla:tbc", function ()
+pfUI:RegisterModule("hoverbind", function ()
   local keymap = {
     -- buttons to binding association
     ["pfActionBarMainButton"]     = "ACTIONBUTTON",
@@ -51,7 +51,7 @@ pfUI:RegisterModule("hoverbind", "vanilla:tbc", function ()
   pfUI.hoverbind.edit:SetAllPoints(UIParent)
   pfUI.hoverbind.edit.tex = pfUI.hoverbind.edit:CreateTexture("pfKeyBindShade", "BACKGROUND")
   pfUI.hoverbind.edit.tex:SetAllPoints(pfUI.hoverbind.edit)
-  pfUI.hoverbind.edit.tex:SetTexture(0,0,0,.5)
+  pfUI.hoverbind.edit.tex:SetColorTexture(0,0,0,.5)
   pfUI.hoverbind.edit:SetScript("OnClick", function()
     pfUI.hoverbind:Hide()
   end)
@@ -103,6 +103,10 @@ pfUI:RegisterModule("hoverbind", "vanilla:tbc", function ()
     else
       return nil
     end
+  end
+
+  local function BindingName(command)
+    return _G["BINDING_NAME_" .. command] or command
   end
 
   function pfUI.hoverbind:GetPrefix()
@@ -157,17 +161,29 @@ pfUI:RegisterModule("hoverbind", "vanilla:tbc", function ()
               if arg1 == "ESCAPE" and not binding then pfUI.hoverbind:Hide() return end
               if binding then
                 if arg1 == "ESCAPE" then 
-                  -- Remove existing binding
-                  local key = (GetBindingKey(binding))
-                  if (key) then
+                  -- Remove all existing bindings
+                  local keys = { GetBindingKey(binding) }
+                  for _, key in ipairs(keys) do
                     SetBinding(key)
+                  end
+                  if keys[1] then
                     SaveBindings(GetCurrentBindingSet())
                   end
                 else 
                   -- Create new binding
-                  local key = map and map[arg1] or arg1
-                  if (SetBinding(prefix..key, binding)) then
+                  local key = prefix .. (map and map[arg1] or arg1)
+                  local previous = GetBindingAction(key)
+                  if (SetBinding(key, binding)) then
                     SaveBindings(GetCurrentBindingSet())
+
+                    if previous and previous ~= "" and previous ~= binding then
+                      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc" .. key .. "|r " .. T["was unbound from"] .. " " .. BindingName(previous))
+                    end
+
+                    local active = GetBindingAction(key, true)
+                    if active ~= binding then
+                      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc" .. key .. "|r " .. T["is currently overridden by"] .. " " .. BindingName(active))
+                    end
                   end
                 end
               end

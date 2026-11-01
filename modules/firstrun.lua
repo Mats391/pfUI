@@ -1,4 +1,4 @@
-pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
+pfUI:RegisterModule("firstrun", function ()
   pfUI.firstrun = CreateFrame("Frame", "pfFirstRunWizard", UIParent)
   pfUI.firstrun.steps = {}
 
@@ -45,6 +45,11 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
 
         return
       end
+    end
+
+    if not self.completed then
+      self.completed = true
+      pfUI.events:TriggerEvent("firstrun:complete")
     end
   end
 
@@ -122,7 +127,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
   -- welcome dialog
   pfUI.firstrun:AddStep("init", function()
     local f = CreateFirstRunPage()
-    f.text:SetText(T["Welcome to |cff33ffccpf|cffffffffUI|r!\n\nI'm the first run wizard that will guide you through some basic configuration. If you're lazy, feel free to hit the \"Defaults\" button. If you wish to run this dialog again, go to the settings and hit the \"Reset Firstrun\" button.\n\nVisit |cff33ffcchttp://shagu.org|r to check for the latest version."])
+    f.text:SetFormattedText(T["Welcome to |cff33ffccpf|cffffffffUI|r!\n\nI'm the first run wizard that will guide you through some basic configuration. If you're lazy, feel free to hit the \"Defaults\" button. If you wish to run this dialog again, go to the settings and hit the \"Reset Firstrun\" button.\n\nVisit |cff33ffcc%s|r to check for the latest version."], GetAddOnMetadata(pfUI.name, "X-Website"))
     return f
   end)
 
@@ -132,8 +137,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     f.text:SetText(T["A new installation of |cff33ffccpf|rUI ships with 4 prebuilt design profiles. Click below if you wish to load one of these profiles."])
 
     f.Modern = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.Modern:SetWidth(120)
-    f.Modern:SetHeight(20)
+    f.Modern:SetSize(120, 20)
     f.Modern:SetPoint("BOTTOM", -65, 100)
     f.Modern:SetTextColor(1,1,1)
     f.Modern:SetText("Modern")
@@ -146,8 +150,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     SkinButton(f.Modern)
 
     f.Nostalgia = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.Nostalgia:SetWidth(120)
-    f.Nostalgia:SetHeight(20)
+    f.Nostalgia:SetSize(120, 20)
     f.Nostalgia:SetPoint("BOTTOM", 65, 100)
     f.Nostalgia:SetTextColor(1,1,1)
     f.Nostalgia:SetText("Nostalgia")
@@ -160,8 +163,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     SkinButton(f.Nostalgia)
 
     f.Legacy = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.Legacy:SetWidth(120)
-    f.Legacy:SetHeight(20)
+    f.Legacy:SetSize(120, 20)
     f.Legacy:SetPoint("BOTTOM", 65, 75)
     f.Legacy:SetTextColor(1,1,1)
     f.Legacy:SetText("Legacy")
@@ -174,8 +176,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     SkinButton(f.Legacy)
 
     f.Slim = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.Slim:SetWidth(120)
-    f.Slim:SetHeight(20)
+    f.Slim:SetSize(120, 20)
     f.Slim:SetPoint("BOTTOM", -65, 75)
     f.Slim:SetTextColor(1,1,1)
     f.Slim:SetText("Slim")
@@ -192,8 +193,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     f.Slider.text:SetPoint("TOP", f.Slider, "BOTTOM", 0, 2)
     f.Slider.text:SetText(T["Scale"])
 
-    f.Slider:SetWidth(240)
-    f.Slider:SetHeight(20)
+    f.Slider:SetSize(240, 20)
     f.Slider:SetPoint("BOTTOM", 0, 50)
     f.Slider:SetOrientation('HORIZONTAL')
     f.Slider:SetMinMaxValues(0.5, 2.0)
@@ -258,7 +258,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     SkinCheckbox(f.checkbox, 18)
 
     f.NextScript = function()
-      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") end
+      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") return end
       pfUI.chat.SetupRightChat(f.checkbox:GetChecked())
     end
 
@@ -278,7 +278,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     SkinCheckbox(f.checkbox, 18)
 
     f.NextScript = function()
-      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") end
+      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") return end
       if f.checkbox:GetChecked() then
         pfUI.chat.SetupPositions()
       end
@@ -300,7 +300,7 @@ pfUI:RegisterModule("firstrun", "vanilla:tbc", function ()
     SkinCheckbox(f.checkbox, 18)
 
     f.NextScript = function()
-      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") end
+      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") return end
       if f.checkbox:GetChecked() then
         pfUI.chat.SetupChannels()
       end

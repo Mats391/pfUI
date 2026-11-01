@@ -1,20 +1,104 @@
 -- load pfUI environment
 setfenv(1, pfUI:GetEnvironment())
 
-local hasUnitxp = pcall(UnitXP, "nop", "nop")
-
 pfUI.uf = CreateFrame("Frame", nil, UIParent)
-pfUI.uf:SetScript("OnUpdate", function()
-  if InCombatLockdown and not InCombatLockdown() then
-    for frame in pairs(pfUI.uf.delayed) do
-      frame:UpdateVisibility()
-      pfUI.uf.delayed[frame] = nil
-    end
-  end
-end)
-
 pfUI.uf.frames = {}
-pfUI.uf.delayed = {}
+
+-- Reusable buffer for C_UnitAuras.GetAuraSlots slot ids (filled by
+-- ScanAuraSlots, api.lua). Each aura scan in RefreshUnit fills it once, then
+-- reads every aura by slot id: one array walk per scan instead of one per index.
+-- Scans run back to back and consume the buffer before the next refill.
+local auraSlots = {}
+
+-- Aura block corner -> { icon anchor point, x direction, y direction, below frame }
+local auraCorners = {
+  TOPLEFT     = { "BOTTOMLEFT",   1,  1 },
+  BOTTOMLEFT  = { "TOPLEFT",      1, -1, true },
+  TOPRIGHT    = { "BOTTOMRIGHT", -1,  1 },
+  BOTTOMRIGHT = { "TOPRIGHT",    -1, -1, true },
+}
+
+-- Flows the shown icons of an aura block outward from the frame edge, starting
+-- `offset` away from it (its own row gap when nil): `perrow` icons per row,
+-- each row as tall as its largest icon. The first `icons.own` icons are the
+-- player's (C_UnitAuras lists them first) and use `icons.ownsize`. Returns the
+-- offset just past the block's last row, where a block sharing the same corner
+-- continues.
+local function LayoutAuraBlock(unit, icons, offset)
+  local corner = auraCorners[icons.pos]
+  local anchor = unit.config.portraitheight ~= "-1" and unit.hp or unit
+  if anchor == unit.hp and corner[4] then anchor = unit.power end
+
+  offset = offset or icons.gapy
+
+  local x, rowsize, col = 0, 0, 0
+  local i = 1
+  while icons[i] and icons[i]:IsShown() do
+    if col == icons.perrow then
+      offset = offset + rowsize + icons.gapy
+      x, rowsize, col = 0, 0, 0
+    end
+
+    local size = i <= icons.own and icons.ownsize or icons.size
+    icons[i]:SetSize(size, size)
+    icons[i]:ClearAllPoints()
+    icons[i]:SetPoint(corner[1], anchor, icons.pos, corner[2] * x, corner[3] * offset)
+
+    x = x + size + icons.gapx
+    if size > rowsize then rowsize = size end
+    col = col + 1
+    i = i + 1
+  end
+
+  if col > 0 then offset = offset + rowsize + icons.gapy end
+  return offset
+end
+
+-- Buffs and debuffs sharing a corner stack in one column: buffs first on
+-- friendly units, debuffs first on neutral and hostile ones.
+local function LayoutAuras(unit, unitstr)
+  local first, second = unit.buffs, unit.debuffs
+  if not UnitIsFriend("player", unitstr) then first, second = second, first end
+
+  if not first then first, second = second, nil end
+  if not first then return end
+
+  local offset = LayoutAuraBlock(unit, first)
+  if second then
+    LayoutAuraBlock(unit, second, second.pos == first.pos and offset or nil)
+  end
+end
+
+-- Starts the timers RefreshUnit stored on the shown icons of an aura block.
+local function StartAuraTimers(icons)
+  if not icons then return end
+
+  local i = 1
+  while icons[i] and icons[i]:IsShown() do
+    local dur = icons[i].auraDuration
+    CooldownFrame_SetTimer(icons[i].cd, icons[i].auraStart, dur, dur > 0 and 1 or 0)
+    i = i + 1
+  end
+end
+
+-- Re-reads the stacks and timer of each shown icon of an aura block from the
+-- slot RefreshUnit filled it from, then restarts the timers. For auras that
+-- refreshed or restacked in place, which leaves every aura in its slot.
+local function RetimeAuras(icons, unitstr)
+  if not icons then return end
+
+  local i = 1
+  while icons[i] and icons[i]:IsShown() do
+    local _, _, count, _, duration, expirationTime = C_UnitAuras.UnitAuraBySlot(unitstr, icons[i].slot)
+    if count then
+      icons[i].stacks:SetText(count > 1 and count or "")
+      icons[i].auraStart, icons[i].auraDuration = GetAuraTimer(duration, expirationTime)
+    end
+    i = i + 1
+  end
+
+  StartAuraTimers(icons)
+end
 
 -- ============================================================================
 -- GUID-based Roster Tracking for Smart Updates
@@ -31,12 +115,45 @@ function pfUI.uf.ClearGuidTracking()
 end
 
 -- slash command to toggle unitframe test mode
-_G.SLASH_PFTEST1, _G.SLASH_PFTEST2 = "/pftest", "/pfuftest"
-_G.SlashCmdList.PFTEST = function()
+pfUI.api.RegisterSlashCommand("PFTEST", { "/pftest", "/pfuftest" }, function()
   pfUI.uf.showall = not pfUI.uf.showall
+  if pfUI.uf.raid and pfUI.uf.raid.LayoutPets then pfUI.uf.raid:LayoutPets() end
+  pfUI.uf:UpdateAllVisibility()
+end, true)
+
+-- Buff indicators are identified by a spell id, resolved once into the aura's
+-- localized name plus its icon. A match needs both to agree.
+--
+-- Icon alone is ambiguous: Spell.dbc reuses icons across unrelated spells, so
+-- an icon-only filter lights the indicator for the wrong buff (Blessing of
+-- Sanctuary shares its icon with Lightning Shield and Shadowguard, Blessing of
+-- Kings with Mage Armor and Commanding Shout, Totemic Power with the Blessed
+-- Sunfruit food buff). Name alone is ambiguous too -- creature and item auras
+-- reuse player spell names ("Renew", "Rejuvenation", "Fire Resistance").
+--
+-- Every rank of a spell carries the same name and icon, so one id per buff
+-- covers the whole rank ladder. Ids missing from this client resolve to nil and
+-- drop out of the list. 'predict' names the libpredict key of a HoT.
+--
+-- Both fields are stored raw, and RefreshUnit compares them raw. The aura's
+-- name and icon and these come out of the same DBC records byte for byte --
+-- Spell.dbc's localized name, SpellIcon.dbc's path -- so case folding either
+-- side would only burn a string per aura per scan. Feed this ids, never
+-- hand-written names or icon paths, or that equality quietly stops holding.
+local indicator_cache = {}
+local function AddIndicator(indicators, spellId, predict)
+  local record = indicator_cache[spellId]
+  if record == nil then
+    local name = C_Spell.GetSpellName(spellId)
+    local icon = name and C_Spell.GetSpellTexture(spellId)
+    -- cache misses as false, so an absent spell is only looked up once
+    record = icon and { name = name, icon = icon, predict = predict } or false
+    indicator_cache[spellId] = record
+  end
+
+  if record then table.insert(indicators, record) end
 end
 
-local scanner
 local glow = {
   edgeFile = pfUI.media["img:glow"], edgeSize = 8,
   insets = {left = 0, right = 0, top = 0, bottom = 0},
@@ -47,99 +164,17 @@ local glow2 = {
   insets = {left = 0, right = 0, top = 0, bottom = 0},
 }
 
-local function DoNothing()
-  return
-end
-
-local maxdurations = {}
-local function BuffOnUpdate()
-  if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + .2 end
-  local bid = GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HELPFUL")
-  local timeleft = GetPlayerBuffTimeLeft(bid)
-  local texture = GetPlayerBuffTexture(bid)
-  local start = 0
-
-  -- slot is empty (buff expired or doesn't exist), clear timer and bail
-  if not texture then
-    CooldownFrame_SetTimer(this.cd, 0, 0, 0)
-    return
-  end
-
-  -- Get buff name for unique key (two buffs could share same texture)
-  local name = ""
-  if libtipscan then
-    scanner = scanner or libtipscan:GetScanner("unitframes")
-    if scanner then
-      scanner:SetPlayerBuff(bid)
-      name = scanner:Line(1) or ""
-    end
-  end
-  local key = texture .. name
-
-  if timeleft > 0 then
-    if not maxdurations[key] then
-      maxdurations[key] = timeleft
-    elseif maxdurations[key] and maxdurations[key] < timeleft then
-      maxdurations[key] = timeleft
-    end
-    start = GetTime() + timeleft - maxdurations[key]
-  end
-
-  CooldownFrame_SetTimer(this.cd, start, maxdurations[key], timeleft > 0 and 1 or 0)
-end
-
-local function TargetBuffOnUpdate()
-  local name, rank, icon, count, duration, timeleft = _G.UnitBuff("target", this.id)
-  if duration and timeleft then
-    CooldownFrame_SetTimer(this.cd, GetTime() + timeleft - duration, duration, 1)
-  else
-    CooldownFrame_SetTimer(this.cd, 0, 0, 0)
-  end
-end
-
 local function BuffOnEnter()
   local parent = this:GetParent()
   if not parent.label then return end
 
+  local unit = parent.label .. parent.id
   GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
-  if parent.label == "player" then
-    GameTooltip:SetPlayerBuff(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HELPFUL"))
-  else
-    GameTooltip:SetUnitBuff(parent.label .. parent.id, this.id)
-  end
+  GameTooltip:SetUnitAura(unit, this.id, "HELPFUL")
 
   if IsShiftKeyDown() then
-    local texture = parent.label == "player" and GetPlayerBuffTexture(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HELPFUL")) or UnitBuff(parent.label .. parent.id, this.id)
-
-    -- slot is empty, nothing to compare against
-    if not texture then return end
-
-    local playerlist = ""
-    local first = true
-
-    if UnitInRaid("player") then
-      for i=1,40 do
-        local unitstr = "raid" .. i
-        if not UnitHasBuff(unitstr, texture) and UnitName(unitstr) then
-          playerlist = playerlist .. ( not first and ", " or "") .. GetUnitColor(unitstr) .. UnitName(unitstr) .. "|r"
-          first = nil
-        end
-      end
-    else
-      if not UnitHasBuff("player", texture) then
-        playerlist = playerlist .. ( not first and ", " or "") .. GetUnitColor("player") .. UnitName("player") .. "|r"
-        first = nil
-      end
-
-      for i=1,4 do
-        local unitstr = "party" .. i
-        if not UnitHasBuff(unitstr, texture) and UnitName(unitstr) then
-          playerlist = playerlist .. ( not first and ", " or "") .. GetUnitColor(unitstr) .. UnitName(unitstr) .. "|r"
-          first = nil
-        end
-      end
-    end
-
+    local aura = C_UnitAuras.GetAuraDataByIndex(unit, this.id, "HELPFUL")
+    local playerlist = aura and GetUnbuffedRoster(aura.name) or ""
     if strlen(playerlist) > 0 then
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine(T["Unbuffed"] .. ":", .3, 1, .8)
@@ -155,77 +190,20 @@ end
 
 local function BuffOnClick()
   if this:GetParent().label == "player" then
-    CancelPlayerBuff(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HELPFUL"))
+    local aura = C_UnitAuras.GetAuraDataByIndex("player", this.id, "HELPFUL")
+    if aura and aura.spellId then C_Spell.CancelSpellByID(aura.spellId) end
   end
-end
-
-local function DebuffOnUpdate()
-  if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + .2 end
-  local bid = GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HARMFUL")
-  local timeleft = GetPlayerBuffTimeLeft(bid)
-  local texture = GetPlayerBuffTexture(bid)
-  local start = 0
-
-  -- slot is empty (debuff expired or doesn't exist), clear timer and bail
-  if not texture then
-    CooldownFrame_SetTimer(this.cd, 0, 0, 0)
-    return
-  end
-
-  -- Get debuff name for unique key (two debuffs could share same texture)
-  local name = ""
-  if libtipscan then
-    scanner = scanner or libtipscan:GetScanner("unitframes")
-    if scanner then
-      scanner:SetPlayerBuff(bid)
-      name = scanner:Line(1) or ""
-    end
-  end
-  local key = texture .. name
-
-  if timeleft > 0 then
-    if not maxdurations[key] then
-      maxdurations[key] = timeleft
-    elseif maxdurations[key] and maxdurations[key] < timeleft then
-      maxdurations[key] = timeleft
-    end
-    start = GetTime() + timeleft - maxdurations[key]
-  end
-
-  CooldownFrame_SetTimer(this.cd, start, maxdurations[key], timeleft > 0 and 1 or 0)
 end
 
 local function DebuffOnEnter()
   if not this:GetParent().label then return end
 
+  local unitstr = this:GetParent().label .. this:GetParent().id
   GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
-  if this:GetParent().label == "player" then
-    GameTooltip:SetPlayerBuff(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HARMFUL"))
-  else
-    local unitstr = this:GetParent().label .. this:GetParent().id
-    local parent = this:GetParent()
-    
-    -- For "only own debuffs" mode: find the REAL slot by matching spell name AND caster
-    if parent.config and parent.config.selfdebuff == "1" and libdebuff then
-      -- Get the spell name from our filtered list
-      local ownDebuffName = libdebuff:UnitOwnDebuff(unitstr, this.id)
-      
-      if ownDebuffName then
-        -- Search through all game slots to find OUR debuff with matching name
-        for gameSlot = 1, 16 do
-          local gameName, _, _, _, _, _, _, gameCaster = libdebuff:UnitDebuff(unitstr, gameSlot)
-          -- Match both name AND caster (must be ours)
-          if gameName == ownDebuffName and gameCaster == "player" then
-            GameTooltip:SetUnitDebuff(unitstr, gameSlot)
-            return
-          end
-        end
-      end
-    end
-    
-    -- Normal mode: use visual id directly
-    GameTooltip:SetUnitDebuff(unitstr, this.id)
-  end
+
+  -- C_UnitAuras lists the player's own auras first, so the selfdebuff
+  -- (HARMFUL|PLAYER) list is a prefix of the HARMFUL list: same index.
+  GameTooltip:SetUnitAura(unitstr, this.id, "HARMFUL")
 end
 
 local function DebuffOnLeave()
@@ -234,326 +212,148 @@ end
 
 local function DebuffOnClick()
   if this:GetParent().label == "player" then
-    CancelPlayerBuff(GetPlayerBuff(PLAYER_BUFF_START_ID+this.id,"HARMFUL"))
+    local aura = C_UnitAuras.GetAuraDataByIndex("player", this.id, "HARMFUL")
+    if aura and aura.spellId then C_Spell.CancelSpellByID(aura.spellId) end
   end
 end
 
-local visibilityscan = CreateFrame("Frame", "pfUnitFrameVisibility", UIParent)
-visibilityscan.frames = {}
-visibilityscan:SetScript("OnUpdate", function()
-  if ( this.limit or 1) > GetTime() then return else this.limit = GetTime() + .2 end
-  for frame in pairs(this.frames) do frame:UpdateVisibility() end
+-- Every enabled unit frame. Group, target and pet events re-check a frame's
+-- visibility in OnEvent, and UNIT_TARGET does for a chained unit (another
+-- unit's target). No event reports a unit going out of sight, though, and a
+-- pet (the frames with a tick) or a chained unit can, so a timer re-checks
+-- those frames, hidden ones included.
+local visibilityframes = {}
+C_Timer.NewTicker(.2, function()
+  for frame in pairs(visibilityframes) do
+    if frame.tick or frame.chain then frame:UpdateVisibility() end
+  end
 end)
 
+-- Re-check every unit frame, for the changes no event reports: unlock mode
+-- and /pftest, which also lift the range and offline fade.
+function pfUI.uf:UpdateAllVisibility()
+  for frame in pairs(visibilityframes) do
+    frame:UpdateVisibility()
+    if frame.label then pfUI.uf:RefreshUnitState(frame) end
+  end
+end
+
+-- the events that can bring a frame's unit into or out of existence
+local VISIBILITY_EVENTS = {
+  PLAYER_ENTERING_WORLD = true,
+  PARTY_MEMBERS_CHANGED = true,
+  RAID_ROSTER_UPDATE = true,
+  PLAYER_TARGET_CHANGED = true,
+  UNIT_PET = true,
+  UNIT_TARGET = true, -- a link of a chained frame's unit retargeted
+}
+
 -- ============================================================================
--- GetUnitStats - Nampower Integration for Health + Power
+-- GetUnitStats - health + power for a unit token.
 -- Returns: hp, maxHp, power, maxPower, powerType
--- IMPORTANT: Uses _G.UnitExists directly to avoid conflicts with Nampower's
---            use GetUnitGUID(unit) for GUID lookup (Nampower 3.0.0+)
 -- ============================================================================
-
--- Cache für Stats-Tracking (nur Änderungen zählen)
-pfUI.api.lastUnitStats = pfUI.api.lastUnitStats or {}
-
-function pfUI.api.IsUnitCharmed(unitstr)
-    if GetUnitField then
-      -- Get guid via the extended UnitExists for Nampower
-      local exists, guid = _G.UnitExists(unitstr)
-      if not exists or not guid then
-        return false
-      end
-      charmedBy = GetUnitField(guid, "charmedBy")
-      return charmedBy and charmedBy ~= '0x0000000000000000'
-    end
-    
-    return UnitIsCharmed(unitstr)
+function pfUI.api.GetUnitStats(unitstr)
+  local powerType = UnitPowerType(unitstr) or 0
+  return UnitHealth(unitstr) or 0,
+         UnitHealthMax(unitstr) or 1,
+         UnitPower(unitstr, powerType) or 0,
+         UnitPowerMax(unitstr, powerType) or 1,
+         powerType
 end
 
-function pfUI.api.GetUnitStats(unitstr, trackStats)
-  local hp, maxHp, power, maxPower, powerType
-  local usedNampower = false
-  
-  
-  -- Try GetUnitField first if available (for all units: players, pets, NPCs)
-  if GetUnitField then
-    -- Use the standard check first, then get guid separately
-    local exists = _G.UnitExists(unitstr)
-    if exists then
-      -- Get guid via the extended UnitExists for Nampower
-      local _, guid = _G.UnitExists(unitstr)
-      
-      if guid then
-        hp = GetUnitField(guid, "health")
-        maxHp = GetUnitField(guid, "maxHealth")
-        
-        -- Get power type from bytes0
-        local bytes0 = GetUnitField(guid, "bytes0")
-        if bytes0 then
-          local temp = math.floor(bytes0 / 16777216)
-          powerType = temp - math.floor(temp / 256) * 256
-        else
-          powerType = UnitPowerType(unitstr) or 0
-        end
-        
-        -- Get power values based on type
-        if powerType == 1 then
-          -- Rage (Nampower stores rage * 10, maxPower2 stores maxRage * 10)
-          local rage = GetUnitField(guid, "power2")
-          local maxRage = GetUnitField(guid, "maxPower2")
-          power = rage and math.floor(rage / 10) or UnitMana(unitstr)
-          maxPower = maxRage and math.floor(maxRage / 10) or UnitManaMax(unitstr)
-        elseif powerType == 3 then
-          -- Energy
-          power = GetUnitField(guid, "power4") or UnitMana(unitstr)
-          if power then power = math.floor(power) end
-          maxPower = GetUnitField(guid, "maxPower4") or UnitManaMax(unitstr)
-        elseif powerType == 2 then
-          -- Focus (Hunter pets use power3)
-          power = GetUnitField(guid, "power3") or UnitMana(unitstr)
-          if power then power = math.floor(power) end
-          maxPower = GetUnitField(guid, "maxPower3") or UnitManaMax(unitstr)
-          
-        else
-          -- Mana (default)
-          power = GetUnitField(guid, "power1") or UnitMana(unitstr)
-          maxPower = GetUnitField(guid, "maxPower1") or UnitManaMax(unitstr)
-        end
-        
-        -- Check if Nampower gave valid health data
-        if hp and hp > 0 and maxHp and maxHp > 0 then
-          usedNampower = true
-          
-          -- Track Nampower success - NUR bei echten Änderungen
-          if trackStats and pfUI.uf and pfUI.uf.stats and pfUI.uf.stats.enabled then
-            local lastStats = pfUI.api.lastUnitStats[unitstr]
-            if not lastStats or lastStats.hp ~= hp or lastStats.maxHp ~= maxHp or 
-               lastStats.power ~= power or lastStats.maxPower ~= maxPower then
-              pfUI.uf.stats.nampowerUsed = (pfUI.uf.stats.nampowerUsed or 0) + 1
-              pfUI.api.lastUnitStats[unitstr] = {
-                hp = hp,
-                maxHp = maxHp,
-                power = power,
-                maxPower = maxPower
-              }
-            end
-          end
-          
-          return hp, maxHp, power or 0, maxPower or 1, powerType
-        end
-      end
-    end
-  end
-  
-  -- Fallback to standard API (for players when Nampower fails)
-  hp = UnitHealth(unitstr) or 0
-  maxHp = UnitHealthMax(unitstr) or 1
-  powerType = UnitPowerType(unitstr) or 0
-  power = UnitMana(unitstr) or 0
-  maxPower = UnitManaMax(unitstr) or 1
-  
-  -- Track Fallback usage - NUR bei echten Änderungen
-  if trackStats and not usedNampower then
-    if pfUI.uf and pfUI.uf.stats and pfUI.uf.stats.enabled then
-      local lastStats = pfUI.api.lastUnitStats[unitstr]
-      if not lastStats or lastStats.hp ~= hp or lastStats.maxHp ~= maxHp or 
-         lastStats.power ~= power or lastStats.maxPower ~= maxPower then
-        pfUI.uf.stats.fallbackUsed = (pfUI.uf.stats.fallbackUsed or 0) + 1
-        pfUI.api.lastUnitStats[unitstr] = {
-          hp = hp,
-          maxHp = maxHp,
-          power = power,
-          maxPower = maxPower
-        }
-      end
-    end
-  end
-  
-  return hp, maxHp, power, maxPower, powerType
+-- Who each hostile unit attacks, by the attacker's GUID. UNIT_TARGET fires for
+-- every unit in view (SuperWoW registers them all for unit events), so this
+-- sees every attacker, not only the ones some token reaches. The server
+-- clears a unit's target when it dies or stops attacking. A unit that comes
+-- into view mid-fight fires nothing until it retargets, so it is noted when a
+-- token first reaches it; one that leaves view fires nothing either, so
+-- UnitHasAggro drops the attackers that are gone.
+local attacking = {}
+
+-- note what `unit` attacks now, and tell the old and the new victim
+local function NoteAttacker(unit)
+  local attacker = UnitGUID(unit)
+  if not attacker then return end
+  local victim = unit .. "target"
+  victim = UnitCanAttack(unit, victim) and UnitIsFriend(victim, "player") and UnitGUID(victim) or nil
+  local old = attacking[attacker]
+  if victim == old then return end
+  attacking[attacker] = victim
+  pfUI.events:TriggerEvent("aggro:changed", old, victim)
 end
 
-local aggrodata = { }
+-- the number of hostile units attacking the friendly `unit`
 function pfUI.api.UnitHasAggro(unit)
-  -- Only cache positive results to allow instant detection when aggro changes
-  if aggrodata[unit] and aggrodata[unit].state > 0 and GetTime() < aggrodata[unit].check + 1 then
-    return aggrodata[unit].state
-  end
+  local guid = UnitGUID(unit)
+  if not guid or not UnitIsFriend(unit, "player") then return 0 end
 
-  aggrodata[unit] = aggrodata[unit] or { }
-  aggrodata[unit].check = GetTime()
-  aggrodata[unit].state = 0
-
-  if UnitExists(unit) and UnitIsFriend(unit, "player") then
-    for u in pairs(pfValidUnits) do
-      local t = u .. "target"
-      local tt = t .. "target"
-
-      if UnitExists(t) and UnitIsUnit(t, unit) and UnitCanAttack(u, unit) then
-        aggrodata[unit].state = aggrodata[unit].state + 1
-      end
-
-      if UnitExists(tt) and UnitIsUnit(tt, unit) and UnitCanAttack(t, unit) then
-        aggrodata[unit].state = aggrodata[unit].state + 1
+  local count = 0
+  for attacker, victim in pairs(attacking) do
+    if victim == guid then
+      if UnitGUID(attacker .. "target") == guid then
+        count = count + 1
+      else
+        -- out of view, where nothing fires
+        attacking[attacker] = nil
       end
     end
   end
-
-  return aggrodata[unit].state
+  return count
 end
 
-pfUI.uf.glow = CreateFrame("Frame", nil, UIParent)
-pfUI.uf.glow:SetScript("OnUpdate", function()
-  local fpsmod = GetFramerate() / 30
-  if not this.val or this.val >= .8 then
-    this.mod = -0.01 / fpsmod
-  elseif this.val <= .4 then
-    this.mod = 0.01  / fpsmod
-  end
-  this.val = this.val + this.mod
+pfUI.events:RegisterFrameEventAndCallback("UNIT_TARGET", function(_, unit)
+  NoteAttacker(unit)
+  -- the new target may have come into view mid-fight
+  NoteAttacker(unit .. "target")
 end)
+pfUI.events:RegisterFrameEventAndCallback("PLAYER_TARGET_CHANGED", function() NoteAttacker("target") end)
+pfUI.events:RegisterFrameEventAndCallback("PLAYER_FOCUS_CHANGED", function() NoteAttacker("focus") end)
+pfUI.events:RegisterFrameEventAndCallback("UPDATE_MOUSEOVER_UNIT", function() NoteAttacker("mouseover") end)
+pfUI.events:RegisterFrameEventAndCallback("NAME_PLATE_UNIT_ADDED", function(_, unit) NoteAttacker(unit) end)
 
-pfUI.uf.glow.mod = 0
-pfUI.uf.glow.val = 0.6
+-- a loading screen leaves every attacker behind
+pfUI.events:RegisterFrameEventAndCallback("PLAYER_ENTERING_WORLD", function() attacking = {} end)
 
-function pfUI.uf.glow.UpdateGlowAnimation()
-  local val = pfUI.uf.glow.val or 0.6
-  if val < 0.4 then val = 0.4 end
-  if val > 0.8 then val = 0.8 end
-  this:SetAlpha(val)
-end
-
-local detect_icon, detect_name
-local buff_icons_seeded = false
-function pfUI.uf:DetectBuff(name, id)
-  if not name or not id then return end
-
-  -- skip here if disabled
-  if pfUI_config.unitframes.buffdetect == "0" then
-    return UnitBuff(name, id)
-  end
-
-  -- clear previously assigned
-  detect_icon, detect_name = nil, nil
-
-  -- register tooltip scanner
-  scanner = scanner or libtipscan:GetScanner("unitframes")
-
-  -- make sure the icon cache exists
-  pfUI_cache.buff_icons = pfUI_cache.buff_icons or {}
-
-  -- seed cache from static locale data once per login
-  -- reverses L["icons"] (name→icon) into buff_icons (icon→name)
-  -- so that pfUI_cache.buff_icons[detect_icon] hits for all known buffs immediately
-  if not buff_icons_seeded then
-    for name, icon in pairs(L["icons"]) do
-      local path = "Interface\\Icons\\" .. icon
-      pfUI_cache.buff_icons[path] = pfUI_cache.buff_icons[path] or name
-    end
-    buff_icons_seeded = true
-  end
-
-  -- check the regular way
-  detect_icon = UnitBuff(name, id)
-  if detect_icon then
-    if not pfUI_cache.buff_icons[detect_icon] then
-      -- read buff name and cache it
-      scanner:SetUnitBuff(name, id)
-      detect_name = scanner:Line(1)
-
-      if detect_name then
-        pfUI_cache.buff_icons[detect_icon] = detect_name
+-- a frame showing the old or the new victim redraws its aggro
+pfUI.events:RegisterCallback("aggro:changed", function(_, old, new)
+  for frame in pairs(visibilityframes) do
+    if frame.aggro then
+      local guid = UnitGUID(frame.label .. frame.id)
+      if guid and (guid == old or guid == new) then
+        frame.update_combat = true
       end
     end
-
-    -- return the regular function
-    return UnitBuff(name, id)
   end
-
-  -- try to guess the buff based on tooltips and icon caches
-  scanner:SetUnitBuff(name, id)
-  detect_name = scanner:Line(1)
-
-  if detect_name then
-    -- try to find the spell icon in locales
-    if L["icons"][detect_name] then
-      return "Interface\\Icons\\" .. L["icons"][detect_name], 1
-    end
-
-    -- try to find the spell icon in caches
-    for icon, name in pairs(pfUI_cache.buff_icons) do
-      if name == detect_name then return icon, 1 end
-    end
-
-    -- try GetUnitField spellId -> libdebuff icon (Nampower, for custom spells)
-    if GetUnitField and GetUnitGUID and pfUI.libdebuff_GetSpellIcon then
-      local guid = GetUnitGUID(name)
-      if guid then
-        local auras = GetUnitField(guid, "aura")
-        if auras then
-          for _, spellId in pairs(auras) do
-            if type(spellId) == "number" and spellId > 0 then
-              local sname = GetSpellRecField and GetSpellRecField(spellId, "name")
-              if sname == detect_name then
-                local tex = pfUI.libdebuff_GetSpellIcon(spellId)
-                if tex and not string.find(tex, "QuestionMark") then
-                  pfUI_cache.buff_icons[tex] = detect_name
-                  return tex, 1
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-
-    -- return fallback image
-    return "interface\\icons\\inv_misc_questionmark", 1
-  end
-
-  -- nothing found
-  return nil
-end
-
-function pfUI.uf:GetRaidFrameId()
-    local self = self or this
-    -- cache result of strsub to avoid repeating calls
-    if not self.cache_raid then
-        if strsub(self:GetName(),0,6) == "pfRaid" then
-            self.cache_raid = tonumber(strsub(self:GetName(),7,8))
-        else
-            self.cache_raid = 0
-        end
-    end
-    
-    return self.cache_raid
-end
-
-function pfUI.uf:CanAssist(unit, unitstr)
-    if unit:GetRaidFrameId() > 0 then
-        return true
-    end
-
-    return UnitCanAssist("player", unitstr)
-end
+end, "unitframes")
 
 function pfUI.uf:UpdateVisibility()
   local self = self or this
 
-  -- we're infight, delay the update
-  if InCombatLockdown and InCombatLockdown() then
-    pfUI.uf.delayed[self] = true
-    return
+  -- cache result of strsub to avoid repeating calls
+  if not self.cache_raid then
+    local name = self:GetName()
+    if strsub(name,0,9) == "pfRaidPet" then
+      -- pet grid slot (pfRaidPet1..40); used to mirror party pets below
+      self.cache_raid = 0
+      self.cache_raidpet = tonumber(strsub(name,10)) or 0
+    elseif strsub(name,0,6) == "pfRaid" then
+      self.cache_raid = tonumber(strsub(name,7,8)) or 0
+    else
+      self.cache_raid = 0
+    end
   end
 
   -- show groupframes as raid
-  local id = self:GetRaidFrameId()
-  if id > 0 then
+  if self.cache_raid > 0 then
+    local id = self.cache_raid
+
     -- always show self in raidframes
-    if not UnitInRaid("player") and GetNumPartyMembers() == 0 and C.unitframes.selfinraid == "1" and id == 1 then
+    if not IsInGroup() and C.unitframes.selfinraid == "1" and id == 1 then
       self.id = ""
       self.label = "player"
 
     -- use raidframes for groups
-    elseif not UnitInRaid("player") and GetNumPartyMembers() > 0 and C.unitframes.raidforgroup == "1" then
+    elseif not IsInRaid() and IsInGroup() and C.unitframes.raidforgroup == "1" then
       if id == 1 then
         self.id = ""
         self.label = "player"
@@ -569,6 +369,26 @@ function pfUI.uf:UpdateVisibility()
     end
   end
 
+  -- show raidpet frames as party pets when a party is shown as a raid grid
+  if self.cache_raidpet then
+    if not IsInRaid() and IsInGroup() and C.unitframes.raidforgroup == "1" then
+      local id = self.cache_raidpet
+      if id == 1 then
+        -- grid slot 1 mirrors the player, so its pet is the player's pet
+        self.id = ""
+        self.label = "pet"
+      elseif id <= 5 then
+        self.id = id - 1
+        self.label = "partypet"
+      end
+
+    -- reset to regular raidpet unitstrings after leaving party mode
+    elseif self.label == "pet" or self.label == "partypet" then
+      self.id = self.cache_raidpet
+      self.label = "raidpet"
+    end
+  end
+
   -- display every unit as player while pfUI.uf.showall is set
   if pfUI.uf.showall then
     self._label = self._label or self.label
@@ -579,8 +399,21 @@ function pfUI.uf:UpdateVisibility()
     self._label, self._id = nil, nil
   end
 
-  local unitstr = string.format("%s%s", self.label or "", self.id or "")
-  local visibility = string.format("[target=%s,exists] show; hide", unitstr)
+  -- this runs on every refresh, so only touch the attribute when the unit
+  -- actually changed
+  local unitstr = self.label .. self.id
+  if unitstr ~= self.unitstr then
+    self.unitstr = unitstr
+    self:SetAttribute("unit", unitstr)
+  end
+  -- anything but "show"/"hide" means "show if the unit exists"
+  local visibility = "exists"
+
+  -- Group frames are redundant when the group is already shown as a raid grid:
+  -- either an actual raid, or a party promoted to the raid grid via
+  -- raidforgroup. hide_in_raid gates whether we hide them in that case.
+  local hide_group = C["unitframes"]["group"]["hide_in_raid"] == "1"
+    and (IsInRaid() or (C.unitframes.raidforgroup == "1" and IsInGroup()))
 
   if pfUI.unlock and pfUI.unlock:IsShown() then
     -- display during unlock mode
@@ -590,35 +423,46 @@ function pfUI.uf:UpdateVisibility()
     -- frame shall not be visible
     visibility = "hide"
     self.visible = nil
-  elseif C["unitframes"]["group"]["hide_in_raid"] == "1" and self.label and strsub(self.label,0,5) == "party" and UnitInRaid("player") then
-    -- hide group while in raid and option is set
+  elseif hide_group and self.cache_raid == 0 and not self.cache_raidpet and self.label and strsub(self.label,0,5) == "party" then
+    -- hide group while shown as a raid grid and option is set (raid player
+    -- frames carry label "party" and raid pet frames carry label "partypet"
+    -- under raidforgroup, so exclude them by cache_raid / cache_raidpet)
     visibility = "hide"
     self.visible = nil
   elseif ( self.fname == "Group0" or self.fname == "PartyPet0" or self.fname == "Party0Target" )
-  and (GetNumPartyMembers() <= 0 or (C["unitframes"]["group"]["hide_in_raid"] == "1" and UnitInRaid("player"))) then
-     -- hide self in group if solo or hide in raid is set
+  and (not IsInGroup() or hide_group) then
+     -- hide self in group if solo or shown as a raid grid
      visibility = "hide"
      self.visible = nil
   end
 
-  -- tbc visibility
-  if pfUI.client > 11200 then
-    self:SetAttribute("unit", unitstr)
-
-    -- update visibility condition on change
-    if self.visibilitycondition ~= visibility then
-      RegisterStateDriver(self, 'visibility', visibility)
-      self.visibilitycondition = visibility
-      self.visible = true
-    end
-
-    return
+  -- This is the single place a frame's unit is ever assigned, so it is also the
+  -- place its subscriptions follow it to: the engine then delivers only this
+  -- unit's events, and OnEvent compares against the cached string instead of
+  -- rebuilding label..id -- and calling UnitGUID -- for every unit event fired
+  -- by anything, anywhere. A frame that is not in use drops them entirely; the
+  -- VISIBILITY_EVENTS that bring it back are registered plainly.
+  --
+  -- A chained unit -- another unit's target, "targettarget" or "party1target"
+  -- -- has no token that unit events name, so the frame follows it by GUID,
+  -- which every unit event also fires with. It follows the unit only while
+  -- the client has it: a link's target can be out of sight, and its coming
+  -- back is then a new unit too. The unit changes with no event of its own
+  -- whenever a link of the chain retargets; UNIT_TARGET on every link reports
+  -- that (RegisterChainEvents), and the GUID compare turns it into the full
+  -- refresh a new unit needs.
+  self.chain = visibility ~= "hide" and unitstr:match("^(.+)target$") or nil
+  if self.chain then
+    local guid = UnitName(unitstr) and UnitGUID(unitstr)
+    if guid ~= self.eventunit then self.update_full = true end
+    self:RegisterUnitEvents(guid)
+  else
+    self:RegisterUnitEvents(visibility ~= "hide" and unitstr or nil)
   end
+  self:RegisterChainEvents(self.chain)
 
   -- vanilla visibility
-  if self.unitname and self.unitname ~= "focus" and self.unitname ~= "focustarget" then
-    self:Show()
-  elseif visibility == "hide" then
+  if visibility == "hide" then
     self:Hide()
   elseif visibility == "show" then
     self:Show()
@@ -627,6 +471,11 @@ function pfUI.uf:UpdateVisibility()
       -- hide existing but too far away pet and pets of old group members
       if self.label == "partypet" then
         if not UnitIsVisible(unitstr) or not UnitExists("party" .. self.id) then
+          self:Hide()
+          return
+        end
+      elseif self.label == "raidpet" then
+        if not UnitIsVisible(unitstr) or not UnitExists("raid" .. self.id) then
           self:Hide()
           return
         end
@@ -664,19 +513,16 @@ function pfUI.uf:UpdateFrameSize()
   if self.config.portrait == "left" or self.config.portrait == "right" then
     if ptwidth == "-1" and ptheight == "-1" then
       -- align portrait size to frame
-      self.portrait:SetWidth(real_height)
-      self.portrait:SetHeight(real_height)
+      self.portrait:SetSize(real_height, real_height)
       portrait = real_height + spacing + 2*default_border
     else
       -- use custom portrait size
-      self.portrait:SetWidth(ptwidth)
-      self.portrait:SetHeight(ptheight)
+      self.portrait:SetSize(ptwidth, ptheight)
       portrait = ptwidth + spacing + 2*default_border
     end
   end
 
-  self:SetWidth(width + portrait)
-  self:SetHeight(real_height)
+  self:SetSize(width + portrait, real_height)
 end
 
 function pfUI.uf:UpdateConfig()
@@ -684,9 +530,8 @@ function pfUI.uf:UpdateConfig()
   local C = pfUI_config
   local rawborder, default_border = GetBorderSize("unitframes")
   local spacing = f.config.pspace * GetPerfectPixel()
-
-  local cooldown_text = tonumber(f.config.cooldown_text)
-  local cooldown_anim = tonumber(f.config.cooldown_anim)
+  -- aura icon backdrops sit outside the icon, so gaps clear both borders
+  local aura_border = (C.appearance.border.force_blizz == "1" and 1 or 2) * default_border
 
   local relative_point = "BOTTOM"
   if f.config.panchor == "TOPLEFT" then
@@ -710,11 +555,9 @@ function pfUI.uf:UpdateConfig()
   f.glow:SetBackdrop(glow2)
   f.glow:SetPoint("TOPLEFT", f, "TOPLEFT", -6 - default_border,6 + default_border)
   f.glow:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 6 + default_border,-6 - default_border)
-  f.glow:SetScript("OnUpdate", pfUI.uf.glow.UpdateGlowAnimation)
   f.glow:Hide()
 
-  f.combat:SetWidth(tonumber(f.config.squaresize))
-  f.combat:SetHeight(tonumber(f.config.squaresize))
+  f.combat:SetSize(tonumber(f.config.squaresize), tonumber(f.config.squaresize))
   f.combat:ClearAllPoints()
   f.combat:SetPoint(f.config.squarepos, 0, 0)
   f.combat:Hide()
@@ -722,11 +565,12 @@ function pfUI.uf:UpdateConfig()
   f.hp:ClearAllPoints()
   f.hp:SetPoint("TOP", 0, 0)
 
-  f.hp:SetWidth(f.config.width)
-  f.hp:SetHeight(f.config.height)
+  f.hp:SetSize(f.config.width, f.config.height)
   if tonumber(f.config.height) < 0 then f.hp:Hide() end
   pfUI.api.CreateBackdrop(f.hp, default_border)
 
+  -- one level above the backdrop for the bar's background, one more for its fill
+  f.hp.bar:SetFrameLevel(f.hp.backdrop:GetFrameLevel() + 2)
   f.hp.bar:SetStatusBarTexture(pfUI.media[f.config.bartexture])
   f.hp.bar:SetAllPoints(f.hp)
   if f.config.verticalbar == "1" then
@@ -741,16 +585,16 @@ function pfUI.uf:UpdateConfig()
   if custombg == "1" then
     local cr, cg, cb, ca = GetStringColor(custombgcolor)
     cr, cg, cb, ca = tonumber(cr), tonumber(cg), tonumber(cb), tonumber(ca)
-    f.hp.bar:SetStatusBarBackgroundTexture(cr,cg,cb,ca)
+    f.hp.bar:SetStatusBarBackgroundColor(cr,cg,cb,ca)
   end
 
   f.power:ClearAllPoints()
   f.power:SetPoint(f.config.panchor, f.hp, relative_point, f.config.poffx, -2 * default_border - spacing + f.config.poffy * GetPerfectPixel())
-  f.power:SetWidth((f.config.pwidth ~= "-1" and f.config.pwidth or f.config.width))
-  f.power:SetHeight(f.config.pheight)
+  f.power:SetSize((f.config.pwidth ~= "-1" and f.config.pwidth or f.config.width), f.config.pheight)
   if tonumber(f.config.pheight) < 0 then f.power:Hide() end
 
   pfUI.api.CreateBackdrop(f.power, default_border)
+  f.power.bar:SetFrameLevel(f.power.backdrop:GetFrameLevel() + 2)
   f.power.bar:SetStatusBarTexture(pfUI.media[f.config.pbartexture])
   f.power.bar:SetAllPoints(f.power)
 
@@ -760,7 +604,7 @@ function pfUI.uf:UpdateConfig()
   if custompbg == "1" then
     local cr, cg, cb, ca = GetStringColor(custompbgcolor)
     cr, cg, cb, ca = tonumber(cr), tonumber(cg), tonumber(cb), tonumber(ca)
-    f.power.bar:SetStatusBarBackgroundTexture(cr,cg,cb,ca)
+    f.power.bar:SetStatusBarBackgroundColor(cr,cg,cb,ca)
   end
 
   local fontname, fontsize, fontstyle
@@ -774,8 +618,51 @@ function pfUI.uf:UpdateConfig()
     fontstyle = C.global.font_unit_style
   end
 
+  -- Druid secondary mana bar: texture/color/size/position below the power bar,
+  -- using its own C.unitframes.druidmana* config. Values are read in
+  -- UpdateDruidMana; here we only lay it out.
+  if f.druidmana then
+    local DC = C.unitframes
+    local dmTexture = DC.druidmanatexture or "Interface\\AddOns\\pfUI\\img\\bar"
+    f.druidmana:SetStatusBarTexture(pfUI.media[dmTexture] or dmTexture)
+    f.druidmana:SetFrameLevel(f:GetFrameLevel() + 5)
+
+    local manacolor = f.config.defcolor == "0" and f.config.manacolor or C.unitframes.manacolor
+    f.druidmana:SetStatusBarColor(GetStringColor(manacolor))
+
+    local dmHeight = tonumber(DC.druidmanaheight) or 10
+    local dmWidth  = DC.druidmanawidth or "-1"
+    local dmOffX   = tonumber(DC.druidmanaoffx) or 0
+    local dmOffY   = tonumber(DC.druidmanaoffy) or 0
+    local dmSpace  = tonumber(DC.druidmanaspace) or -3
+    local dmSpacing = -2 * default_border - dmSpace
+
+    f.druidmana:SetHeight(dmHeight)
+    f.druidmana:ClearAllPoints()
+    local w = dmWidth ~= "-1" and tonumber(dmWidth) or nil
+    if w then
+      f.druidmana:SetWidth(w)
+      f.druidmana:SetPoint("TOP", f.power, "BOTTOM", dmOffX, dmSpacing + dmOffY)
+    else
+      f.druidmana:SetPoint("TOPLEFT", f.power, "BOTTOMLEFT", dmOffX, dmSpacing + dmOffY)
+      f.druidmana:SetPoint("TOPRIGHT", f.power, "BOTTOMRIGHT", dmOffX, dmSpacing + dmOffY)
+    end
+
+    if not f.druidmana._hasbd then
+      CreateBackdrop(f.druidmana, default_border)
+      CreateBackdropShadow(f.druidmana)
+      f.druidmana._hasbd = true
+    end
+
+    local tr, tg, tb = ManaBarColor[Enum.PowerType.Mana].r, ManaBarColor[Enum.PowerType.Mana].g, ManaBarColor[Enum.PowerType.Mana].b
+    if C.unitframes.pastel == "1" then
+      tr, tg, tb = (tr + .75) * .5, (tg + .75) * .5, (tb + .75) * .5
+    end
+    f.druidmana.text:SetFont(fontname, fontsize, fontstyle)
+    f.druidmana.text:SetTextColor(tr, tg, tb, 1)
+  end
+
   f.portrait.tex:SetAllPoints(f.portrait)
-  f.portrait.tex:SetTexCoord(.1, .9, .1, .9)
   f.portrait.model:SetAllPoints(f.portrait)
 
   if f.config.portrait == "bar" then
@@ -830,11 +717,7 @@ function pfUI.uf:UpdateConfig()
   end
 
   if f.group then
-    if f.config.raidgrouplabel == "1" then
-      f.group:Show()
-    else
-      f.group:Hide()
-    end
+    f.group:SetShown(f.config.raidgrouplabel == "1")
 
     local xoff = tonumber(f.config.grouplabelxoff) or 0
     local yoff = tonumber(f.config.grouplabelyoff) or 8
@@ -855,28 +738,43 @@ function pfUI.uf:UpdateConfig()
       f.feedbackText:ClearAllPoints()
       f.feedbackText:SetPoint("CENTER", f.portrait, "CENTER")
     end
-    f:RegisterEvent("UNIT_COMBAT")
+    f.combatfeedback = true
   else
     f.feedbackText:Hide()
-    f:UnregisterEvent("UNIT_COMBAT")
+    f.combatfeedback = nil
   end
 
+  -- range fade: UnitInRange's answer comes as an event, a UnitXP threshold
+  -- has none and is polled. With the 40y check off a frame fades by sight,
+  -- which UNIT_DISTANCE_CHECK_UPDATE reports.
+  local fade = f.config.faderange == "1" and C.unitframes.rangecheck == "1"
+  local unitxp = C.unitframes.rangecheck_mode == "unitxp" and _G.UnitXP
+  f.rangeevent = fade and not unitxp or nil
+  f.rangepoll = fade and unitxp and true or nil
+
+  -- aggro:changed reaches only the frames that show aggro
+  f.aggro = (f.config.squareaggro == "1" or f.config.glowaggro == "1") or nil
+
+  -- RegisterUnitEvents owns UNIT_COMBAT and UNIT_IN_RANGE_UPDATE; clearing the
+  -- cached unit makes the next UpdateVisibility re-run it against the new state.
+  f.eventunit = nil
+
   f.hpLeftText:SetFontObject(GameFontWhite)
-  f.hpLeftText:SetFont(fontname, fontsize + tonumber(f.config.txthpleftsizedelta), fontstyle)
+  f.hpLeftText:SetFont(fontname, fontsize, fontstyle)
   f.hpLeftText:SetJustifyH("LEFT")
   f.hpLeftText:ClearAllPoints()
   f.hpLeftText:SetPoint("TOPLEFT",f.hp.bar, "TOPLEFT", 2*(default_border + f.config.txthpleftoffx), 1 + tonumber(f.config.txthpleftoffy))
   f.hpLeftText:SetPoint("BOTTOMRIGHT",f.hp.bar, "BOTTOMRIGHT", -2*(default_border + f.config.txthpleftoffx), f.config.txthpleftoffy)
 
   f.hpRightText:SetFontObject(GameFontWhite)
-  f.hpRightText:SetFont(fontname, fontsize + tonumber(f.config.txthprightsizedelta), fontstyle)
+  f.hpRightText:SetFont(fontname, fontsize, fontstyle)
   f.hpRightText:SetJustifyH("RIGHT")
   f.hpRightText:ClearAllPoints()
   f.hpRightText:SetPoint("TOPLEFT",f.hp.bar, "TOPLEFT", 2*(default_border + f.config.txthprightoffx), 1 + tonumber(f.config.txthprightoffy))
   f.hpRightText:SetPoint("BOTTOMRIGHT",f.hp.bar, "BOTTOMRIGHT", -2*(default_border + f.config.txthprightoffx), f.config.txthprightoffy)
 
   f.hpCenterText:SetFontObject(GameFontWhite)
-  f.hpCenterText:SetFont(fontname, fontsize + tonumber(f.config.txthpcentersizedelta), fontstyle)
+  f.hpCenterText:SetFont(fontname, fontsize, fontstyle)
   f.hpCenterText:SetJustifyH("CENTER")
   f.hpCenterText:ClearAllPoints()
   f.hpCenterText:SetPoint("TOPLEFT",f.hp.bar, "TOPLEFT", f.config.txthpcenteroffx, 1 + tonumber(f.config.txthpcenteroffy))
@@ -903,8 +801,7 @@ function pfUI.uf:UpdateConfig()
   f.powerCenterText:SetPoint("TOPLEFT",f.power.bar, "TOPLEFT", f.config.txtpowercenteroffx, 1 + tonumber(f.config.txtpowercenteroffy))
   f.powerCenterText:SetPoint("BOTTOMRIGHT",f.power.bar, "BOTTOMRIGHT", f.config.txtpowercenteroffx, f.config.txtpowercenteroffy)
 
-  f.incHeal:SetHeight(f.config.height)
-  f.incHeal:SetWidth(f.config.width)
+  f.incHeal:SetSize(f.config.width, f.config.height)
   f.incHeal.texture:SetTexture(pfUI.media["img:bar"])
   local cr, cg, cb, ca = GetStringColor(f.config.healcolor)
   cr, cg, cb, ca = tonumber(cr), tonumber(cg), tonumber(cb), tonumber(ca)
@@ -920,53 +817,46 @@ function pfUI.uf:UpdateConfig()
   end
 
   f.ressIcon:SetFrameLevel(16)
-  f.ressIcon:SetWidth(32)
-  f.ressIcon:SetHeight(32)
+  f.ressIcon:SetSize(32, 32)
   f.ressIcon:SetPoint("CENTER", f, "CENTER", 0, 4)
   f.ressIcon.texture:SetTexture(pfUI.media["img:ress"])
   f.ressIcon.texture:SetAllPoints(f.ressIcon)
   f.ressIcon:Hide()
 
-  f.leaderIcon:SetWidth(10)
-  f.leaderIcon:SetHeight(10)
+  f.leaderIcon:SetSize(10, 10)
   f.leaderIcon:SetPoint("CENTER", f, "TOPLEFT", 0, 0)
   f.leaderIcon.texture:SetTexture("Interface\\GROUPFRAME\\UI-Group-LeaderIcon")
   f.leaderIcon.texture:SetAllPoints(f.leaderIcon)
   f.leaderIcon:Hide()
 
-  f.lootIcon:SetWidth(10)
-  f.lootIcon:SetHeight(10)
+  f.lootIcon:SetSize(10, 10)
   f.lootIcon:SetPoint("CENTER", f, "LEFT", 0, 0)
   f.lootIcon.texture:SetTexture("Interface\\GROUPFRAME\\UI-Group-MasterLooter")
   f.lootIcon.texture:SetAllPoints(f.lootIcon)
   f.lootIcon:Hide()
 
-  f.pvpIcon:SetWidth(f.config.pvpiconsize)
-  f.pvpIcon:SetHeight(f.config.pvpiconsize)
+  f.pvpIcon:SetSize(f.config.pvpiconsize, f.config.pvpiconsize)
   f.pvpIcon:SetPoint(f.config.pvpiconalign, f, f.config.pvpiconalign, f.config.pvpiconoffx, f.config.pvpiconoffy)
   f.pvpIcon.texture:SetTexture(pfUI.media["img:pvp"])
   f.pvpIcon.texture:SetAllPoints(f.pvpIcon)
   f.pvpIcon.texture:SetVertexColor(1,1,1,.5)
   f.pvpIcon:Hide()
 
-  f.raidIcon:SetWidth(f.config.raidiconsize)
-  f.raidIcon:SetHeight(f.config.raidiconsize)
+  f.raidIcon:SetSize(f.config.raidiconsize, f.config.raidiconsize)
   f.raidIcon:SetPoint("CENTER", f, f.config.raidiconalign, f.config.raidiconoffx, f.config.raidiconoffy)
   local raidIconTex = C.unitframes.blizzard_raidicons == "1" and "Interface\\TargetingFrame\\UI-RaidTargetingIcons" or pfUI.media["img:raidicons"]
   f.raidIcon.texture:SetTexture(raidIconTex)
   f.raidIcon.texture:SetAllPoints(f.raidIcon)
   f.raidIcon:Hide()
 
-  f.restIcon:SetWidth(16)
-  f.restIcon:SetHeight(16)
+  f.restIcon:SetSize(16, 16)
   f.restIcon:SetPoint("TOP", f, "TOPLEFT", 0, -1)
   f.restIcon.texture:SetTexture("Interface\\CharacterFrame\\UI-StateIcon", true)
   f.restIcon.texture:SetTexCoord(0, .5, 0, .421875)
   f.restIcon.texture:SetAllPoints(f.restIcon)
   f.restIcon:Hide()
 
-  f.happinessIcon:SetWidth(tonumber(C.unitframes.pet.happinesssize))
-  f.happinessIcon:SetHeight(tonumber(C.unitframes.pet.happinesssize))
+  f.happinessIcon:SetSize(tonumber(C.unitframes.pet.happinesssize), tonumber(C.unitframes.pet.happinesssize))
   f.happinessIcon:SetPoint("CENTER", f, "TOPLEFT", default_border, -default_border)
   f.happinessIcon.texture:SetTexture(pfUI.media["img:neutral"])
   f.happinessIcon.texture:SetAllPoints(f.happinessIcon)
@@ -983,12 +873,16 @@ function pfUI.uf:UpdateConfig()
     f.buffs = nil
   else
     f.buffs = f.buffs or {}
+    f.buffs.pos = f.config.buffs
+    f.buffs.size = tonumber(f.config.buffsize)
+    f.buffs.ownsize = f.config.ownbuffsize == "-1" and f.buffs.size or tonumber(f.config.ownbuffsize)
+    f.buffs.perrow = tonumber(f.config.buffperrow)
+    f.buffs.gapx = aura_border + tonumber(f.config.buffspacingx)
+    f.buffs.gapy = aura_border + tonumber(f.config.buffspacingy)
+    f.buffs.own = 0
 
     for i=1, 32 do
       if i > tonumber(f.config.bufflimit) then break end
-
-      local perrow = f.config.buffperrow
-      local row = floor((i-1) / perrow)
 
       f.buffs[i] = f.buffs[i] or CreateFrame("Button", "pfUI" .. f.fname .. "Buff" .. i, f)
       f.buffs[i].texture = f.buffs[i].texture or f.buffs[i]:CreateTexture()
@@ -1004,83 +898,14 @@ function pfUI.uf:UpdateConfig()
 
       f.buffs[i]:SetFrameLevel(12)
       f.buffs[i]:RegisterForClicks("RightButtonUp")
-      f.buffs[i]:ClearAllPoints()
 
-      local invert_h, invert_v, af
-      if f.config.buffs == "TOPLEFT" then
-        invert_h = 1
-        invert_v = 1
-        af = "BOTTOMLEFT"
-      elseif f.config.buffs == "BOTTOMLEFT" then
-        invert_h = -1
-        invert_v = 1
-        af = "TOPLEFT"
-      elseif f.config.buffs == "TOPRIGHT" then
-        invert_h = 1
-        invert_v = -1
-        af = "BOTTOMRIGHT"
-      elseif f.config.buffs == "BOTTOMRIGHT" then
-        invert_h = -1
-        invert_v = -1
-        af = "TOPRIGHT"
-      end
-
-      local anchor = f.config.portraitheight ~= "-1" and f.hp or f
-      if anchor == f.hp and (f.config.buffs == "BOTTOMLEFT" or f.config.buffs == "BOTTOMRIGHT") then
-        anchor = f.power
-      end
-      local multiply = C.appearance.border.force_blizz == "1" and 1 or 2
-      f.buffs[i]:SetPoint(af, anchor, f.config.buffs,
-      invert_v * (i-1-row*perrow)*(multiply*default_border + f.config.buffsize + 1),
-      invert_h * (row*(multiply*default_border + f.config.buffsize + 1) + (multiply*default_border + 1)))
-
-      f.buffs[i]:SetWidth(f.config.buffsize)
-      f.buffs[i]:SetHeight(f.config.buffsize)
-      
-      -- Create CD frame if it doesn't exist
-      if not f.buffs[i].cd then
-        if cooldown_anim == 1 then
-          -- Animation enabled: Use Model frame with CooldownFrameTemplate
-          f.buffs[i].cd = CreateFrame(COOLDOWN_FRAME_TYPE, f.buffs[i]:GetName() .. "Cooldown", f.buffs[i], "CooldownFrameTemplate")
-        else
-          -- Animation disabled: Use regular Frame with dummy functions
-          f.buffs[i].cd = CreateFrame("Frame", f.buffs[i]:GetName() .. "Cooldown", f.buffs[i])
-          f.buffs[i].cd.AdvanceTime = DoNothing
-          f.buffs[i].cd.SetSequence = DoNothing
-          f.buffs[i].cd.SetSequenceTime = DoNothing
-        end
-      end
-      
-      -- Always update CD properties (in case size changed)
-      local cdScale = f.config.buffsize / 32
-      f.buffs[i].cd:ClearAllPoints()
-      f.buffs[i].cd:SetScale(cdScale)
-      f.buffs[i].cd:SetAllPoints(f.buffs[i])
+      f.buffs[i].cd = f.buffs[i].cd or CreateCooldown(f.buffs[i], "unitframe", f.buffs[i]:GetName() .. "Cooldown")
       f.buffs[i].cd:SetFrameLevel(14)
-      f.buffs[i].cd.pfCooldownType = "ALL"
-      f.buffs[i].cd.pfCooldownStyleText = cooldown_text
-      f.buffs[i].cd.pfCooldownStyleAnimation = cooldown_anim
-      f.buffs[i].cd:SetAlpha(cooldown_anim == 1 and 1 or 0)
-      
-      -- immediately show/hide existing cooldown text
-      if f.buffs[i].cd.pfCooldownText then
-        if cooldown_text == 1 then
-          f.buffs[i].cd.pfCooldownText:Show()
-        else
-          f.buffs[i].cd.pfCooldownText:Hide()
-        end
-      end
-      
+
       f.buffs[i].id = i
       f.buffs[i]:Hide()
 
       CreateBackdrop(f.buffs[i], default_border)
-
-      if f:GetName() == "pfPlayer" then
-        f.buffs[i]:SetScript("OnUpdate", BuffOnUpdate)
-      elseif f:GetName() == "pfTarget" and pfUI.expansion == "tbc" then
-        f.buffs[i]:SetScript("OnUpdate", TargetBuffOnUpdate)
-      end
 
       f.buffs[i]:SetScript("OnEnter", BuffOnEnter)
       f.buffs[i]:SetScript("OnLeave", BuffOnLeave)
@@ -1098,6 +923,13 @@ function pfUI.uf:UpdateConfig()
     f.debuffs = nil
   else
     f.debuffs = f.debuffs or {}
+    f.debuffs.pos = f.config.debuffs
+    f.debuffs.size = tonumber(f.config.debuffsize)
+    f.debuffs.ownsize = f.config.owndebuffsize == "-1" and f.debuffs.size or tonumber(f.config.owndebuffsize)
+    f.debuffs.perrow = tonumber(f.config.debuffperrow)
+    f.debuffs.gapx = aura_border + tonumber(f.config.debuffspacingx)
+    f.debuffs.gapy = aura_border + tonumber(f.config.debuffspacingy)
+    f.debuffs.own = 0
 
     for i=1, 32 do
       if i > tonumber(f.config.debufflimit) then break end
@@ -1116,53 +948,15 @@ function pfUI.uf:UpdateConfig()
 
       f.debuffs[i]:SetFrameLevel(12)
       f.debuffs[i]:RegisterForClicks("RightButtonUp")
-      f.debuffs[i]:ClearAllPoints()
-      f.debuffs[i]:SetWidth(f.config.debuffsize)
-      f.debuffs[i]:SetHeight(f.config.debuffsize)
       f.debuffs[i]:SetNormalTexture(nil)
       
-      -- Create CD frame if it doesn't exist
-      if not f.debuffs[i].cd then
-        if cooldown_anim == 1 then
-          -- Animation enabled: Use Model frame with CooldownFrameTemplate
-          f.debuffs[i].cd = CreateFrame(COOLDOWN_FRAME_TYPE, f.debuffs[i]:GetName() .. "Cooldown", f.debuffs[i], "CooldownFrameTemplate")
-        else
-          -- Animation disabled: Use regular Frame with dummy functions
-          f.debuffs[i].cd = CreateFrame("Frame", f.debuffs[i]:GetName() .. "Cooldown", f.debuffs[i])
-          f.debuffs[i].cd.AdvanceTime = DoNothing
-          f.debuffs[i].cd.SetSequence = DoNothing
-          f.debuffs[i].cd.SetSequenceTime = DoNothing
-        end
-      end
-      
-      -- Always update CD properties (in case size changed)
-      local cdScale = f.config.debuffsize / 32
-      f.debuffs[i].cd:ClearAllPoints()
-      f.debuffs[i].cd:SetScale(cdScale)
-      f.debuffs[i].cd:SetAllPoints(f.debuffs[i])
+      f.debuffs[i].cd = f.debuffs[i].cd or CreateCooldown(f.debuffs[i], "unitframe", f.debuffs[i]:GetName() .. "Cooldown")
       f.debuffs[i].cd:SetFrameLevel(14)
-      f.debuffs[i].cd.pfCooldownType = "ALL"
-      f.debuffs[i].cd.pfCooldownStyleText = cooldown_text
-      f.debuffs[i].cd.pfCooldownStyleAnimation = cooldown_anim
-      f.debuffs[i].cd:SetAlpha(cooldown_anim == 1 and 1 or 0)
-      
-      -- immediately show/hide existing cooldown text
-      if f.debuffs[i].cd.pfCooldownText then
-        if cooldown_text == 1 then
-          f.debuffs[i].cd.pfCooldownText:Show()
-        else
-          f.debuffs[i].cd.pfCooldownText:Hide()
-        end
-      end
-      
+
       f.debuffs[i].id = i
       f.debuffs[i]:Hide()
 
       CreateBackdrop(f.debuffs[i], default_border)
-
-      if f:GetName() == "pfPlayer" then
-        f.debuffs[i]:SetScript("OnUpdate", DebuffOnUpdate)
-      end
 
       f.debuffs[i]:SetScript("OnEnter", DebuffOnEnter)
       f.debuffs[i]:SetScript("OnLeave", DebuffOnLeave)
@@ -1177,6 +971,10 @@ function pfUI.uf:UpdateConfig()
     f:UpdateFrameSize()
   else
     f:UnregisterAllEvents()
+    -- that dropped the unit filters along with the registrations, so the
+    -- caches have to go too or the next UpdateVisibility believes they are
+    -- still set
+    f.eventunit, f.chainkey = nil, nil
     f:Hide()
   end
 end
@@ -1192,6 +990,10 @@ function pfUI.uf.OnEvent()
     this:UnregisterAllEvents()
     this:SetScript("OnEvent", nil)
     this:SetScript("OnUpdate", nil)
+    -- the visibility timer keeps ticking, so leaving this frame on its list
+    -- would have UpdateVisibility re-register the unit events we just
+    -- dropped -- straight back into the crash 132 this branch prevents
+    visibilityframes[this] = nil
     return
   end
   
@@ -1209,12 +1011,18 @@ function pfUI.uf.OnEvent()
   -- abort on broken unitframes (e.g focus)
   if not this.label then return end
 
+  -- a hidden frame runs no OnUpdate, so its unit coming into existence has to
+  -- show it from here
+  if VISIBILITY_EVENTS[event] then
+    this:UpdateVisibility()
+  end
+
   -- update regular frames
   if event == "PLAYER_ENTERING_WORLD" then
     this.update_full = true
     -- Clear GUID tracking on zone change for full rebuild
     if pfUI.uf.ClearGuidTracking then pfUI.uf.ClearGuidTracking() end
-  elseif this.label == "target" and event == "PLAYER_TARGET_CHANGED" and not pfScanActive == true then
+  elseif this.label == "target" and event == "PLAYER_TARGET_CHANGED" then
     this.update_full = true
     -- immediately update raid icon to avoid delay on target swap
     if this.raidIcon and this.config and this.config.raidicon == "1" then
@@ -1230,7 +1038,7 @@ function pfUI.uf.OnEvent()
     -- Smart update: check if THIS frame's unit actually changed
     if pfUI.uf.guidTracker and this.id then
       local unit = this.label == "player" and "player" or (this.label .. this.id)
-      local newGuid = GetUnitGUID(unit)
+      local newGuid = UnitGUID(unit)
       local oldGuid = pfUI.uf.guidTracker.frameToGuid[this]
       if newGuid ~= oldGuid then
         pfUI.uf.guidTracker.frameToGuid[this] = newGuid
@@ -1239,10 +1047,6 @@ function pfUI.uf.OnEvent()
     else
       this.update_full = true
     end
-  elseif ( this.label == "raid" or this.label == "party" ) and event == "PARTY_MEMBER_ENABLE" then
-    this.update_full = true
-  elseif ( this.label == "raid" or this.label == "party" ) and event == "PARTY_MEMBER_DISABLE" then
-    this.update_full = true
   elseif ( this.label == "raid" or this.label == "party" ) and event == "RAID_ROSTER_UPDATE" then
     -- Note: Smart GUID-based updates are handled in raid.lua OnUpdate
     -- after frame IDs are reassigned. We don't set update_full here anymore
@@ -1254,22 +1058,56 @@ function pfUI.uf.OnEvent()
     -- Raid frames: update_full is set by raid.lua GUID tracker
   elseif this.label == "pet" and event == "UNIT_PET" then
     this.update_full = true
-  elseif this.label == "player" and (event == "PLAYER_AURAS_CHANGED" or event == "UNIT_INVENTORY_CHANGED") then
+  elseif this.label == "player" and (event == "PLAYER_AURAS_CHANGED" or event == "PLAYER_EQUIPMENT_CHANGED") then
     this.update_aura = true
   elseif this.label == "pet" and event == "UNIT_HAPPINESS" then
     this.update_full = true
-  -- UNIT_XXX Events
-  elseif arg1 and arg1 == this.label .. this.id then
-    this.lastEventUpdate = GetTime()
-    
+  elseif event == "UNIT_IN_RANGE_UPDATE" then
+    -- registered for the frame's unit alone, and fired in the filter's lower
+    -- case spelling, which a GUID's compare below would miss
+    pfUI.uf:RefreshUnitState(this)
+  -- UNIT_XXX Events. RegisterUnitEvents means arg1 can only be the unit this
+  -- frame follows -- its token, or a chained unit's GUID; the compare is kept
+  -- for the case the filter sits out, which is when arg1 is not a string. These
+  -- events fire once per token that resolves to the unit AND once with the raw
+  -- GUID, so filtering on one of the two never wakes the frame twice.
+  elseif arg1 and arg1 == this.eventunit then
     if event == "UNIT_PORTRAIT_UPDATE" or event == "UNIT_MODEL_CHANGED" then
       this.update_portrait = true
     elseif event == "UNIT_AURA" then
       this.update_aura = true
+    elseif event == "UNIT_AURA_DELTA" then
+      -- an aura that only refreshed or restacked leaves every aura in its
+      -- slot, so the icons need their timers and stacks, not a rebuild
+      if arg2.isFullUpdate or arg2.addedAuraInstanceIDs or arg2.removedAuraInstanceIDs then
+        this.update_aura = true
+      else
+        this.update_auratime = true
+      end
+    elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
+      -- every power of the unit reports, a cat druid's mana regen too; redraw
+      -- for the one the bar shows, and for mana under a druid mana bar
+      local _, shown = UnitPowerType(arg1)
+      if arg2 == shown or (arg2 == "MANA" and this.druidmana) then
+        this.update_base = true
+      end
     elseif event == "UNIT_FACTION" then
-      this.update_pvp = true
+      -- the PvP flag, the reaction colour and the tapped grey
+      this.update_indicators = true
+      this.update_base = true
+    elseif event == "UNIT_FLAGS" then
+      this.update_combat = true
+    elseif event == "UNIT_DISTANCE_CHECK_UPDATE" then
+      -- the portrait trades the question mark for the model, the frame fades
+      -- by sight, and an attacker that left with the member is let go
+      this.update_portrait = true
+      this.update_combat = true
+    elseif event == "UNIT_CONNECTION" then
+      this.update_full = true
     elseif event == "UNIT_COMBAT" then
       CombatFeedback_OnCombatEvent(arg2, arg3, arg4, arg5)
+    elseif event == "INCOMING_RESURRECT_CHANGED" then
+      this.update_indicators = true
     else
       this.update_base = true
     end
@@ -1283,228 +1121,61 @@ local _GetTime = GetTime
 pfUI.uf.now = 0
 
 -- ============================================================================
--- GLOBAL FALLBACK THROTTLE - Limits total fallback updates across ALL frames
--- ============================================================================
-pfUI.uf.fallbackThrottle = {
-  lastUpdate = 0,
-  interval = 0.1,  -- 10 updates per second total (not per frame!)
-  updatesThisInterval = 0,
-  maxUpdatesPerInterval = 5  -- Max 5 frames can update per interval
-}
-
--- ============================================================================
--- STATS SYSTEM - Performance tracking for Nampower vs Fallback
--- ============================================================================
-pfUI.uf.stats = {
-  eventUpdates = 0,
-  heartbeatUpdates = 0,
-  earlyReturns = 0,
-  nampowerUsed = 0,
-  fallbackUsed = 0,
-  throttledSkips = 0,
-  startTime = 0,
-  enabled = true
-}
-
--- Stats Frame (Live Display)
-pfUI.uf.statsFrame = CreateFrame("Frame", "pfUIStatsFrame", UIParent)
-pfUI.uf.statsFrame:SetWidth(200)
-pfUI.uf.statsFrame:SetHeight(220)
-pfUI.uf.statsFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -10, -200)
-pfUI.uf.statsFrame:SetBackdrop({
-  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-  tile = true, tileSize = 16, edgeSize = 8,
-  insets = { left = 3, right = 3, top = 3, bottom = 3 }
-})
-pfUI.uf.statsFrame:SetBackdropColor(0, 0, 0, 0.8)
-pfUI.uf.statsFrame:EnableMouse(true)
-pfUI.uf.statsFrame:SetMovable(true)
-pfUI.uf.statsFrame:SetClampedToScreen(true)
-pfUI.uf.statsFrame:RegisterForDrag("LeftButton")
-pfUI.uf.statsFrame:SetScript("OnDragStart", function() this:StartMoving() end)
-pfUI.uf.statsFrame:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
-pfUI.uf.statsFrame:Hide()
-
--- Stats Title
-pfUI.uf.statsFrame.title = pfUI.uf.statsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-pfUI.uf.statsFrame.title:SetPoint("TOP", pfUI.uf.statsFrame, "TOP", 0, -8)
-pfUI.uf.statsFrame.title:SetText("Performance")
-
--- Stats Text (multi-line)
-pfUI.uf.statsFrame.text = pfUI.uf.statsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-pfUI.uf.statsFrame.text:SetPoint("TOPLEFT", pfUI.uf.statsFrame, "TOPLEFT", 10, -30)
-pfUI.uf.statsFrame.text:SetWidth(180)
-pfUI.uf.statsFrame.text:SetHeight(180)
-pfUI.uf.statsFrame.text:SetJustifyH("LEFT")
-pfUI.uf.statsFrame.text:SetJustifyV("TOP")
-pfUI.uf.statsFrame.text:SetText("Initializing...")
-
--- Update function for stats display
-pfUI.uf.UpdateStatsDisplay = function()
-  local elapsed = GetTime() - pfUI.uf.stats.startTime
-  if elapsed < 0.1 then return end
-  
-  local eventRate = pfUI.uf.stats.eventUpdates / elapsed
-  local heartbeatRate = pfUI.uf.stats.heartbeatUpdates / elapsed
-  local totalFrameUpdates = eventRate + heartbeatRate
-  
-  -- Calculate Nampower vs Fallback percentages (ONLY counts actual data changes!)
-  local totalDataChanges = pfUI.uf.stats.nampowerUsed + pfUI.uf.stats.fallbackUsed
-  local nampowerPct = totalDataChanges > 0 and math.floor((pfUI.uf.stats.nampowerUsed / totalDataChanges) * 100) or 0
-  local fallbackPct = totalDataChanges > 0 and math.floor((pfUI.uf.stats.fallbackUsed / totalDataChanges) * 100) or 0
-  
-  -- Calculate data change rate (how often HP/Mana actually changes)
-  local dataChangeRate = totalDataChanges / elapsed
-  
-  local statsText = string.format(
-    "Time: %.1fs\n" ..
-    "|cffaaaaaa--- Frame Updates ---|r\n" ..
-    "Event: %.1f/s (%d)\n" ..
-    "Heartbeat: %.1f/s (%d)\n" ..
-    "Total: %.1f/s\n" ..
-    "\n" ..
-    "|cffaaaaaa--- Data Changes ---|r\n" ..
-    "Rate: %.1f/s (%d)\n" ..
-    "|cff00ff00NP: %d%% (%d)|r\n" ..
-    "|cffff8800FB: %d%% (%d)|r",
-    elapsed,
-    eventRate,
-    pfUI.uf.stats.eventUpdates,
-    heartbeatRate,
-    pfUI.uf.stats.heartbeatUpdates,
-    totalFrameUpdates,
-    dataChangeRate,
-    totalDataChanges,
-    nampowerPct,
-    pfUI.uf.stats.nampowerUsed,
-    fallbackPct,
-    pfUI.uf.stats.fallbackUsed
-  )
-  
-  pfUI.uf.statsFrame.text:SetText(statsText)
-end
-
--- Stats update timer
-pfUI.uf.statsUpdateTimer = 0
-
--- Cache cleanup timer (clean lastUnitStats every 30s to prevent memory leak)
-pfUI.uf.cacheCleanupTimer = 0
-
--- ============================================================================
--- OnUpdate with Heartbeat Polling and Fallback
+-- OnUpdate - draining the event-set update flags, heal prediction, and the
+-- two polls no event replaces (a UnitXP range threshold, the pet frames).
 -- ============================================================================
 function pfUI.uf.OnUpdate()
   local now = _GetTime()
   pfUI.uf.now = now
-  
-  -- Update stats display (throttled to 0.2s)
-  if pfUI.uf.statsFrame and pfUI.uf.statsFrame:IsShown() then
-    if (pfUI.uf.statsUpdateTimer or 0) <= now then
-      pfUI.uf.statsUpdateTimer = now + 0.2
-      if pfUI.uf.stats.startTime > 0 then
-        pfUI.uf.UpdateStatsDisplay()
-      end
-    end
-  end
-  
-  -- Cleanup lastUnitStats cache every 30 seconds to prevent memory leak
-  if (pfUI.uf.cacheCleanupTimer or 0) <= now then
-    pfUI.uf.cacheCleanupTimer = now + 30
-    
-    -- Only keep cache for units that currently exist
-    if pfUI.api.lastUnitStats then
-      for unitstr in pairs(pfUI.api.lastUnitStats) do
-        if not _G.UnitExists(unitstr) then
-          pfUI.api.lastUnitStats[unitstr] = nil
-        end
-      end
-    end
-  end
-  
+      
   -- update combat feedback (no throttle - needs immediate feedback)
   if this.feedbackText then CombatFeedback_OnUpdate(arg1) end
 
   -- Throttle raid/party frames for performance
   if this.label == "raid" or this.label == "party" then
     if (this.throttleTick or 0) > now then
-      if pfUI.uf.stats and pfUI.uf.stats.enabled then
-        pfUI.uf.stats.throttledSkips = pfUI.uf.stats.throttledSkips + 1
-      end
       return
     end
     this.throttleTick = now + 0.1  -- Default: 10 FPS
   end
 
-  -- ============================================================================
-  -- EVENTLESS ACTIONS (Range Check, Online/Offline, Aggro) - MUST RUN ALWAYS
-  -- These run on their own timer, independent of event-based updates
-  -- ============================================================================
   if this.label then
-    -- Combat/Aggro Indicators (throttled to 0.2s)
-    if not this.lastCombatCheck then this.lastCombatCheck = now + 0.2 end
-    if this.lastCombatCheck < now then
-      this.lastCombatCheck = now + 0.2
-      
-      if this.config and this.config.squareaggro == "1" and pfUI.api.UnitHasAggro(this.label .. this.id) > 0 then
-        this.combat.tex:SetTexture(1,.2,0)
-        this.combat:Show()
-      elseif this.config and this.config.squarecombat == "1" and UnitAffectingCombat(this.label .. this.id) then
-        this.combat.tex:SetTexture(1,1,.2)
-        this.combat:Show()
-      elseif this.combat then
-        this.combat:Hide()
+    -- what no event reports: a UnitXP range threshold, and the pet frames
+    -- (created with a tick)
+    if this.rangepoll or this.tick then
+      -- Validate tick value - it should be an interval (e.g. 0.5), not a timestamp
+      local tickInterval = this.tick
+      if tickInterval and tickInterval > 10 then
+        -- tick is a timestamp, not an interval - ignore it
+        tickInterval = nil
       end
-    end
+      -- Reset lastTick if it's invalid (much larger than now, e.g. from corrupted state)
+      if this.lastTick and this.lastTick > now + 10 then
+        this.lastTick = nil
+      end
+      if not this.lastTick then this.lastTick = now + (tickInterval or .5) end
+      if this.lastTick < now then
+        local unitstr = this.label .. this.id
+        this.lastTick = now + (tickInterval or .5)
 
-    -- Range Check / Online-Offline State (throttled)
-    -- Validate tick value - it should be an interval (e.g. 0.5), not a timestamp
-    local tickInterval = this.tick
-    if tickInterval and tickInterval > 10 then
-      -- tick is a timestamp, not an interval - ignore it
-      tickInterval = nil
-    end
-    -- Reset lastTick if it's invalid (much larger than now, e.g. from corrupted state)
-    if this.lastTick and this.lastTick > now + 10 then
-      this.lastTick = nil
-    end
-    if not this.lastTick then this.lastTick = now + (tickInterval or .5) end
-    if this.lastTick < now then
-      local unitstr = this.label .. this.id
-      this.lastTick = now + (tickInterval or .5)
+        if this.rangepoll then pfUI.uf:RefreshUnitState(this) end
 
-      -- target target has a huge delay, make sure to not tick during range checks
-      if this.label == "targettarget" or this.label == "targettargettarget" then
-        local name = UnitName(this.label)
-        if name ~= this.namebuf1 then
-          this.namebuf1 = name
-        elseif name ~= this.namebuf2 then
-          this.namebuf2 = name
-        else
-          pfUI.uf:RefreshUnitState(this)
-          pfUI.uf:RefreshIndicators(this)
+        -- A pet's full refresh rescans every aura and the portrait, so only
+        -- do it when the unit behind the frame changes or once a second;
+        -- other ticks refresh the bars only.
+        if this.tick then
+          local guid = UnitGUID(unitstr)
+          if guid ~= this.tickGuid or (this.tickFull or 0) < now then
+            this.tickGuid = guid
+            this.tickFull = now + 1
+            pfUI.uf:RefreshUnit(this, "all")
+          else
+            pfUI.uf:RefreshUnit(this, "base")
+          end
         end
-      else
-        pfUI.uf:RefreshUnitState(this)
-        pfUI.uf:RefreshIndicators(this)
-      end
-
-      if this.config and this.config.glowaggro == "1" and pfUI.api.UnitHasAggro(unitstr) > 0 then
-        this.glow:SetBackdropBorderColor(1,.2,0)
-        this.glow:Show()
-      elseif this.config and this.config.glowcombat == "1" and UnitAffectingCombat(unitstr) then
-        this.glow:SetBackdropBorderColor(1,1,.2)
-        this.glow:Show()
-      elseif this.glow then
-        this.glow:Hide()
-      end
-
-      -- update everything on eventless frames (targettarget, etc)
-      if this.tick then
-        pfUI.uf:RefreshUnit(this, "all")
       end
     end
-    
+
     -- Heal Prediction (throttled to 0.1s for responsiveness)
     if libpredict and this.incHeal then
       if not this.lastHealTick then this.lastHealTick = now end
@@ -1514,19 +1185,7 @@ function pfUI.uf.OnUpdate()
         local unit = this.label .. this.id
         local heal = libpredict:UnitGetIncomingHeals(unit)
         
-        -- O(1) Nampower lookup via GUID (same pattern as nameplates.lua)
-        local health, maxHealth
-        if GetUnitField then
-          local guid = GetUnitGUID(unit)
-          if guid then
-            health = GetUnitField(guid, "health")
-            maxHealth = GetUnitField(guid, "maxHealth")
-          end
-        end
-        -- Fallback to standard API
-        if not health or not maxHealth or maxHealth == 0 then
-          health, maxHealth = UnitHealth(unit), UnitHealthMax(unit)
-        end
+        local health, maxHealth = UnitHealth(unit), UnitHealthMax(unit)
 
         if heal - health - maxHealth ~= this.predictstate then
           local overhealperc = tonumber(this.config.overhealperc)
@@ -1567,14 +1226,6 @@ function pfUI.uf.OnUpdate()
             this.incHeal:Hide()
           end
         end
-        
-        -- update ressurections
-        local ress = libpredict:UnitHasIncomingResurrection(unit)
-        if ress and UnitIsDeadOrGhost(unit) then
-          this.ressIcon:Show()
-        else
-          this.ressIcon:Hide()
-        end
       end
     end
   end
@@ -1583,110 +1234,40 @@ function pfUI.uf.OnUpdate()
   -- EVENT-BASED UPDATES (Health, Mana, Auras, etc.)
   -- ============================================================================
   
-  -- Check if we have pending updates from events
-  local hasUpdates = this.update_full or this.update_base or 
-                     this.update_aura or this.update_portrait or 
-                     this.update_pvp or this.update_indicators
-  
-  -- Track event-triggered updates (not API calls, just frame updates)
-  if hasUpdates and pfUI.uf.stats and pfUI.uf.stats.enabled then
-    pfUI.uf.stats.eventUpdates = pfUI.uf.stats.eventUpdates + 1
-  end
-  
-  -- Heartbeat Polling: If no events pending, check if we need fallback
-  if not hasUpdates then
-    local timeSinceEvent = this.lastEventUpdate and (now - this.lastEventUpdate) or 999
-    
-    -- If >0.5s since last event and unit exists, try heartbeat
-    if timeSinceEvent > 0.5 and this.label and _G.UnitExists(this.label .. this.id) then
-      local needsFallback = false
-      
-      -- Check if Nampower can provide data
-      if GetUnitField then
-        -- Use _G.UnitExists to avoid conflicts with range checking
-        local unitstr = this.label .. this.id
-        local exists = _G.UnitExists(unitstr)
-        if exists then
-          local _, guid = _G.UnitExists(unitstr)
-          if guid then
-            local hp = GetUnitField(guid, "health")
-            if not hp or hp == 0 then
-              needsFallback = true
-            end
-          else
-            needsFallback = true
-          end
-        else
-          needsFallback = true
-        end
-      else
-        needsFallback = true
-      end
-      
-      if needsFallback then
-        -- GLOBAL Throttle: Limit fallback updates across ALL frames
-        local throttle = pfUI.uf.fallbackThrottle
-        
-        -- Reset counter each interval
-        if now - throttle.lastUpdate > throttle.interval then
-          throttle.lastUpdate = now
-          throttle.updatesThisInterval = 0
-        end
-        
-        -- Check if we've exceeded max updates this interval
-        if throttle.updatesThisInterval >= throttle.maxUpdatesPerInterval then
-          if pfUI.uf.stats and pfUI.uf.stats.enabled then
-            pfUI.uf.stats.earlyReturns = pfUI.uf.stats.earlyReturns + 1
-          end
-          return
-        end
-        
-        throttle.updatesThisInterval = throttle.updatesThisInterval + 1
-        
-        -- Nampower not available or no data - trigger fallback update
-        this.update_base = true
-        if pfUI.uf.stats and pfUI.uf.stats.enabled then
-          pfUI.uf.stats.heartbeatUpdates = pfUI.uf.stats.heartbeatUpdates + 1
-        end
-      else
-        -- Nampower working fine, no update needed
-        if pfUI.uf.stats and pfUI.uf.stats.enabled then
-          pfUI.uf.stats.earlyReturns = pfUI.uf.stats.earlyReturns + 1
-        end
-        return
-      end
-    else
-      -- Too soon or unit doesn't exist
-      if pfUI.uf.stats and pfUI.uf.stats.enabled then
-        pfUI.uf.stats.earlyReturns = pfUI.uf.stats.earlyReturns + 1
-      end
-      return
-    end
-  end
-
-  -- process indicator update events
-  if this.update_indicators then
-    pfUI.uf:RefreshIndicators(this)
-    this.update_indicators = nil
-  end
 
   -- process all queued unit events
   if this.update_full then
-    -- process full updates
+    -- process full updates, indicators and combat state included
     pfUI.uf:RefreshUnit(this, "all")
 
     -- clear update caches
     this.update_full = nil
     this.update_base = nil
     this.update_aura = nil
+    this.update_auratime = nil
     this.update_portrait = nil
-    this.update_pvp = nil
+    this.update_indicators = nil
+    this.update_combat = nil
   else
-    -- process individual events
+    if this.update_indicators then
+      pfUI.uf:RefreshIndicators(this)
+      this.update_indicators = nil
+    end
+
+    if this.update_combat then
+      pfUI.uf:RefreshCombat(this)
+      this.update_combat = nil
+    end
+
+    -- process individual events; a rebuild re-times the icons as well
     if this.update_aura then
       pfUI.uf:RefreshUnit(this, "aura")
       this.update_aura = nil
+      this.update_auratime = nil
       this.update_base = true
+    elseif this.update_auratime then
+      pfUI.uf:RefreshUnit(this, "auratime")
+      this.update_auratime = nil
     end
 
     if this.update_portrait then
@@ -1695,63 +1276,11 @@ function pfUI.uf.OnUpdate()
       this.update_base = true
     end
 
-    if this.update_pvp then
-      pfUI.uf:RefreshUnit(this, "pvp")
-      this.update_pvp = nil
-    end
-
     if this.update_base then
       pfUI.uf:RefreshUnit(this, "base")
       this.update_base = nil
     end
   end
-
-  -- handle pseudo focus frames
-  if this.unitname and this == pfFocus then
-    local unitname = ( this.label and UnitName(this.label) ) or ""
-
-    if pfFocusTarget then -- update focus target
-      pfFocusTarget.label = this.label and this.label .. "target" or nil
-      local focustargetname = pfFocusTarget.label and UnitName(pfFocusTarget.label) or nil
-
-      if pfFocusTarget.lastUnit ~= focustargetname then
-        pfFocusTarget.lastUnit = focustargetname
-        pfFocusTarget.instantRefresh = true
-        pfUI.uf:RefreshUnit(pfFocusTarget, "all")
-      end
-    end
-
-    -- break here on unset focus frames
-    if not this.unitname or this.unitname == "focus" then return end
-
-    -- focus unit detection
-    if this.unitname ~= strlower(unitname) then
-      -- invalid focus frame
-      for unit, bool in pairs(pfValidUnits) do
-        local scan = UnitName(unit) or ""
-        if this.unitname == strlower(scan) then
-          this.label = unit
-          if this.portrait then this.portrait.model.lastUnit = nil end
-          this.instantRefresh = true
-          pfUI.uf:RefreshUnit(this, "all")
-          return
-        end
-        this.label = nil
-        this.instantRefresh = true
-        this.hp.bar:SetStatusBarColor(.2,.2,.2)
-      end
-    end
-  end
-
-  -- handle pseudo focus target visibility
-  if this.unitname and this == pfFocusTarget then
-    if pfFocus and not pfFocus.label or pfFocus.label == "" then
-      this.label = nil
-      return
-    end
-  end
-
-  if not this.label then return end
 
   -- update portrait on first visible frame
   if this.portrait and this.portrait.model and this.portrait.model.update then
@@ -1762,58 +1291,112 @@ function pfUI.uf.OnUpdate()
   end
 end
 
-function pfUI.uf.OnEnter()
-  if not this.label then return end
+-- The unit events whose arg1 is the frame's OWN unit -- everything the OnEvent
+-- routes through its "UNIT_XXX Events" branch. These are not registered here:
+-- UpdateVisibility owns them, because it owns the frame's unit (below).
+--
+-- UNIT_PET and UNIT_HAPPINESS are deliberately absent. Their branches key on
+-- the frame's label, and UNIT_PET's arg1 is the pet's OWNER ("player" for a
+-- "pet" frame), so filtering them by the frame's own unit would drop them.
+local UNIT_EVENTS = {
+  "UNIT_DISPLAYPOWER",
+  "UNIT_HEALTH", "UNIT_MAXHEALTH",
+  "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED",
+  "UNIT_FACTION",
+  "UNIT_FLAGS", -- frame=combat, frame=glow
+  "INCOMING_RESURRECT_CHANGED", -- frame=ressIcon
+}
 
-  -- Nampower: Set native mouseover unit for macro/addon compatibility
-  if SetMouseoverUnit then
-    local unitstr = this.label .. this.id
-    -- For GUID-based frames (focus), use the GUID directly
-    if this.label and string.find(this.label, "^0x") then
-      SetMouseoverUnit(this.label)
-    elseif UnitExists(unitstr) then
-      SetMouseoverUnit(unitstr)
+-- Auras and power. ClassicAPI's UNIT_AURA_DELTA also reports refreshes and new
+-- durations and says what changed; its generic power events name the power, so
+-- a frame skips the ones it does not draw. Both fire for tokens only, so a
+-- chained unit, followed by GUID, keeps 1.12's events instead. A group
+-- member's connection and sight come with them, and a chained unit has
+-- neither event.
+local TOKEN_EVENTS = {
+  "UNIT_AURA_DELTA", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER",
+  "UNIT_CONNECTION", "UNIT_DISTANCE_CHECK_UPDATE",
+}
+local GUID_EVENTS = {
+  "UNIT_AURA",
+  "UNIT_MANA", "UNIT_MAXMANA",
+  "UNIT_RAGE", "UNIT_MAXRAGE",
+  "UNIT_ENERGY", "UNIT_MAXENERGY",
+  "UNIT_FOCUS",
+}
+
+-- Point this frame's unit-event subscriptions at `unit` (a token, or a chained
+-- unit's GUID), or drop them when the frame has no unit. Cheap to call
+-- repeatedly: it no-ops unless the unit actually changed, which matters
+-- because every refresh runs UpdateVisibility.
+function pfUI.uf:RegisterUnitEvents(unit)
+  if self.eventunit == unit then return end
+  self.eventunit = unit
+
+  for i = 1, table.getn(UNIT_EVENTS) do
+    if unit then
+      self:RegisterUnitEvent(UNIT_EVENTS[i], unit)
+    else
+      self:UnregisterEvent(UNIT_EVENTS[i])
     end
   end
 
-  if this.config.showtooltip == "0" then return end
-  GameTooltip_SetDefaultAnchor(GameTooltip, this)
-  GameTooltip:SetUnit(this.label .. this.id)
-  GameTooltip:Show()
-end
-
-function pfUI.uf.OnLeave()
-  -- Nampower: Clear native mouseover unit
-  if SetMouseoverUnit then
-    SetMouseoverUnit()
+  local events, other = TOKEN_EVENTS, GUID_EVENTS
+  if self.chain then events, other = other, events end
+  for i = 1, table.getn(other) do
+    self:UnregisterEvent(other[i])
+  end
+  for i = 1, table.getn(events) do
+    if unit then
+      self:RegisterUnitEvent(events[i], unit)
+    else
+      self:UnregisterEvent(events[i])
+    end
   end
 
-  GameTooltip:FadeOut()
-end
-
-function pfUI.uf.OnClick()
-  if not this.label and this.unitname then
-    TargetByName(this.unitname, true)
+  -- UNIT_COMBAT rides along only while the frame draws combat feedback text,
+  -- and UNIT_IN_RANGE_UPDATE only while it fades by UnitInRange, since
+  -- ClassicAPI checks each unit registered for it every frame; it takes a GUID
+  -- too. UpdateConfig clears eventunit when it toggles either, so the next
+  -- UpdateVisibility re-runs this.
+  if unit and self.combatfeedback then
+    self:RegisterUnitEvent("UNIT_COMBAT", unit)
   else
-    pfUI.uf:ClickAction(arg1)
+    self:UnregisterEvent("UNIT_COMBAT")
+  end
+  if unit and self.rangeevent then
+    self:RegisterUnitEvent("UNIT_IN_RANGE_UPDATE", unit)
+  else
+    self:UnregisterEvent("UNIT_IN_RANGE_UPDATE")
   end
 end
 
-function pfUI.uf:RightClickAction(unit)
-  if unit == "player" then
-    ToggleDropDownMenu(1, nil, PlayerFrameDropDown, "cursor")
-  elseif unit == "target" then
-    ToggleDropDownMenu(1, nil, TargetFrameDropDown, "cursor")
-  elseif unit == "pet" then
-    ToggleDropDownMenu(1, nil, PetFrameDropDown, "cursor")
-  elseif unit == "party" or strfind(unit, "party%d") then
-    ToggleDropDownMenu(1, nil, getglobal("PartyMemberFrame" .. this.id .. "DropDown"), "cursor")
-  elseif unit == "raid" or strfind(unit, "raid%d") then
-    local name = this.lastUnit
-    local unitstr = this.label .. this.id
-    FriendsDropDown.displayMode = "MENU"
-    FriendsDropDown.initialize = function() UnitPopup_ShowMenu(_G[UIDROPDOWNMENU_OPEN_MENU], "PARTY", unitstr, name, id) end
-    ToggleDropDownMenu(1, nil, FriendsDropDown, "cursor")
+-- Point this frame's UNIT_TARGET subscription at every link of its chained
+-- unit, whose `owner` is the unit it is the target of -- for
+-- "targettargettarget" the links are "targettarget" and "target" -- or drop it
+-- when `owner` is nil. By GUID, since the inner links are no token that events
+-- name. Cheap to call repeatedly: it re-registers only when a link changed.
+local chainlinks = {}
+function pfUI.uf:RegisterChainEvents(owner)
+  local n, key = 0, nil
+  while owner do
+    local guid = UnitGUID(owner)
+    if guid then
+      n = n + 1
+      chainlinks[n] = guid
+      key = key and key .. guid or guid
+    end
+    owner = owner:match("^(.+)target$")
+  end
+
+  if key == self.chainkey then return end
+  self.chainkey = key
+
+  if key then
+    for i = table.getn(chainlinks), n + 1, -1 do chainlinks[i] = nil end
+    self:RegisterUnitEvent("UNIT_TARGET", unpack(chainlinks))
+  else
+    self:UnregisterEvent("UNIT_TARGET")
   end
 end
 
@@ -1822,22 +1405,8 @@ function pfUI.uf:EnableEvents()
 
   f:RegisterEvent("PLAYER_ENTERING_WORLD")
   f:RegisterEvent("PLAYER_LOGOUT")
-  f:RegisterEvent("UNIT_DISPLAYPOWER")
-  f:RegisterEvent("UNIT_HEALTH")
-  f:RegisterEvent("UNIT_MAXHEALTH")
-  f:RegisterEvent("UNIT_MANA")
-  f:RegisterEvent("UNIT_MAXMANA")
-  f:RegisterEvent("UNIT_RAGE")
-  f:RegisterEvent("UNIT_MAXRAGE")
-  f:RegisterEvent("UNIT_ENERGY")
-  f:RegisterEvent("UNIT_MAXENERGY")
-  f:RegisterEvent("UNIT_FOCUS")
-  f:RegisterEvent("UNIT_PORTRAIT_UPDATE")
-  f:RegisterEvent("UNIT_MODEL_CHANGED")
-  f:RegisterEvent("UNIT_FACTION")
-  f:RegisterEvent("UNIT_AURA") -- frame=buff, frame=debuff
   f:RegisterEvent("PLAYER_AURAS_CHANGED") -- label=player && frame=buff
-  f:RegisterEvent("UNIT_INVENTORY_CHANGED") -- label=player && frame=buff
+  f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED") -- label=player && frame=buff (ClassicAPI: weapon-enchant buffs)
   f:RegisterEvent("PARTY_MEMBERS_CHANGED") -- label=party, frame=leaderIcon
   f:RegisterEvent("PARTY_LEADER_CHANGED") -- frame=leaderIcon
   f:RegisterEvent("RAID_ROSTER_UPDATE") -- label=raidIcon
@@ -1852,27 +1421,70 @@ function pfUI.uf:EnableEvents()
     'MiddleButtonUp', 'Button4Up', 'Button5Up')
 end
 
+-- ============================================================
+-- Clique compatibility
+-- Clique's pfUI plugin replaces pfUI.uf.ClickAction and expects an
+-- OnClick script to call it (with `this` = frame, `arg1` = button). The
+-- secure attribute path replaced that dispatch, so when Clique is loaded
+-- EnableScripts routes clicks through this legacy Lua path instead. The
+-- secure path is skipped there because type1="target" switches the target
+-- before Clique can cast.
+-- ============================================================
+
+function pfUI.uf.OnClick()
+  pfUI.uf:ClickAction(arg1)
+end
+
+function pfUI.uf:ClickAction(button)
+  local label = this.label or ""
+  local id = this.id or ""
+  local unitstr = label .. id
+
+  if SpellIsTargeting() and button == "RightButton" then
+    SpellStopTargeting()
+    return
+  end
+
+  if SpellIsTargeting() and button == "LeftButton" then
+    SpellTargetUnit(unitstr)
+  elseif CursorHasItem() then
+    DropItemOnUnit(unitstr)
+  end
+
+  -- right-click opens the standard unit menu (ClassicAPI resolves the type)
+  if button == "RightButton" then
+    ClassicAPI_ToggleUnitMenu(unitstr)
+    return
+  end
+
+  -- drop food on petframe
+  if label == "pet" and CursorHasItem() then
+    if UnitClassBase("player") == "HUNTER" then
+      DropItemOnUnit("pet")
+      return
+    end
+  end
+
+  -- default click
+  TargetUnit(unitstr)
+end
+
 function pfUI.uf:EnableScripts()
   local f = self
 
-  -- handle secure unit button templates (> vanilla)
-  if pfUI.client > 11200 then
-    f.showmenu = pfUI.uf.RightClickAction
-    f:SetAttribute("*type1", "target")
-    f:SetAttribute("*type2", "showmenu")
-  else
+  if IsAddOnLoaded("Clique") then
     f:SetScript("OnClick", pfUI.uf.OnClick)
+  else
+    f:SetAttribute("type1", "target")
+    f:SetAttribute("type2", "menu")
+    f:EnableClickCast()
   end
 
   f:SetScript("OnShow", pfUI.uf.OnShow)
   f:SetScript("OnEvent", pfUI.uf.OnEvent)
   f:SetScript("OnUpdate", pfUI.uf.OnUpdate)
-  f:SetScript("OnEnter", pfUI.uf.OnEnter)
-  f:SetScript("OnLeave", pfUI.uf.OnLeave)
-  f:EnableClickCast()
 
-  -- add frame to visibility refresh handler
-  visibilityscan.frames[f] = true
+  visibilityframes[f] = true
 end
 
 function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
@@ -1897,7 +1509,7 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
     unit, id = "target", ""
   end
 
-  local f = CreateFrame("Button", "pf" .. fname, UIParent, UNITFRAME_SECURE_TEMPLATE)
+  local f = CreateFrame("Button", "pf" .. fname, UIParent)
 
   -- add unitframe functions
   f.UpdateFrameSize  = pfUI.uf.UpdateFrameSize
@@ -1905,9 +1517,10 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   f.UpdateConfig     = pfUI.uf.UpdateConfig
   f.EnableScripts    = pfUI.uf.EnableScripts
   f.EnableEvents     = pfUI.uf.EnableEvents
+  f.RegisterUnitEvents = pfUI.uf.RegisterUnitEvents
+  f.RegisterChainEvents = pfUI.uf.RegisterChainEvents
   f.EnableClickCast  = pfUI.uf.EnableClickCast
   f.GetColor         = pfUI.uf.GetColor
-  f.GetRaidFrameId   = pfUI.uf.GetRaidFrameId
 
   -- cache values to the frame
   f.label = strlower(unit)
@@ -1915,13 +1528,6 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   f.id = id
   f.config = config or pfUI_config.unitframes.fallback
   f.tick = tick
-
-  -- disable events for unknown unitstrings
-  if not pfValidUnits[strlower(unit) .. id] then
-    f.unitname = unit
-    f.label, f.id = "", ""
-    f.RegisterEvent = function() return end
-  end
 
   CreateBackdropShadow(f)
 
@@ -1931,8 +1537,32 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   f.power = CreateFrame("Frame",nil, f)
   f.power.bar = CreateStatusBar(nil, f.power)
 
+  -- Druid secondary mana bar: shows base mana (read via ClassicAPI
+  -- UnitPower(unit, Enum.PowerType.Mana), which works regardless of the active
+  -- power) while shapeshifted into a form that uses energy/rage. Player +
+  -- target only;
+  -- styled/positioned in UpdateConfig, driven in UpdateDruidMana.
+  if C.unitframes.druidmanabar == "1" and (f.label == "player" or f.label == "target") then
+    f.druidmana = CreateFrame("StatusBar", "pfDruidMana_" .. f.label .. f.id, f)
+    f.druidmana.text = f.druidmana:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.druidmana.text:SetPoint("CENTER", f.druidmana, "CENTER", 0, 0)
+    f.druidmana.text:SetJustifyH("CENTER")
+    f.druidmana:Hide()
+  end
+
   f.glow = CreateFrame("Frame", nil, f)
-  f.combat = CreateFrame("Frame", nil, f.hp.bar)
+  -- Pulse between .8 and .4 for good. The group only advances while the glow
+  -- is shown, so a hidden glow costs nothing.
+  f.glow:SetAlpha(.8)
+  f.glow.pulse = f.glow:CreateAnimationGroup()
+  f.glow.pulse:SetLooping("BOUNCE")
+  local fade = f.glow.pulse:CreateAnimation("Alpha")
+  fade:SetChange(-.4)
+  fade:SetDuration(1.3)
+  fade:SetSmoothing("IN_OUT")
+  f.glow.pulse:Play()
+
+  f.combat =CreateFrame("Frame", nil, f.hp.bar)
   f.combat.tex = f.combat:CreateTexture(nil, "OVERLAY")
   f.combat.tex:SetAllPoints()
 
@@ -1949,7 +1579,7 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
 
   f.incHeal = CreateFrame("Frame", nil, f.hp)
   -- Texture lives on hp.bar for correct draw order:
-  -- hp.bar.bg (BACKGROUND) < incHeal (BORDER) < hp.bar.bar (NORMAL)
+  -- hp.bar.bg (a level below) < incHeal (BORDER) < hp.bar's fill (ARTWORK)
   f.incHeal.texture = f.hp.bar:CreateTexture(nil, "BORDER")
   f.incHeal.texture:SetAllPoints(f.incHeal)
   -- Override Show/Hide since texture lives on hp.bar, not incHeal
@@ -1992,7 +1622,7 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
     f.group:SetFont(pfUI.font_unit, 8, "OUTLINE")
     f.group:SetTextColor(1,1,1,.8)
     f.group:SetHeight(16)
-    f.group:SetText("Group " .. group)
+    f.group:SetText(T["Group"] .. " " .. group)
     f.group:Hide()
   end
 
@@ -2009,8 +1639,14 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
     f:UpdateFrameSize()
   else
     f:UnregisterAllEvents()
+    -- that dropped the unit filters along with the registrations, so the
+    -- caches have to go too or the next UpdateVisibility believes they are
+    -- still set
+    f.eventunit, f.chainkey = nil, nil
     f:Hide()
   end
+
+  f:SetAttribute("unit", f.label .. f.id)
 
   -- register frame for clique
   _G.ClickCastFrames = ClickCastFrames or {}
@@ -2020,191 +1656,28 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   return f
 end
 
-function pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
-    if not hasUnitxp then
-        return true -- No UnitXp, assume LOS
-    end
-    
-    if not unit.config.los_ind then
-        if unit.hp.bar.noLosIndicator then
-            unit.hp.bar.noLosIndicator:Hide()
-        end
-        return true -- not checking, assume LOS
-    end
-    
-    -- No LOS indicator
-    unit.hp.bar.noLosIndicator = unit.hp.bar.noLosIndicator or CreateFrame("Frame", nil, unit.hp.bar)
-    local indicator = unit.hp.bar.noLosIndicator
-        
-    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.los_ind_size)
-    indicator.tex = indicator.tex or indicator:CreateTexture(nil)
-    indicator.tex:SetAllPoints(indicator)
-    
-    local pos = unit.config.los_ind_pos
-    
-    if pos ~= indicator.pos then
-        indicator:ClearAllPoints()
-        indicator:SetPoint(pos, 0, 0)
-        indicator:SetBackdrop(nil)
-        indicator.pos = pos
-    end
-    
-    if size ~= indicator.size then
-        indicator:SetHeight(size)
-        indicator:SetWidth(size)
-        indicator.size = size
-    end
-    
-    local hasLos = UnitXP("inSight", "player", unitstr)
-    if not hasLos then
-        indicator.tex:SetTexture(pfUI.media["img:NoLos"])
-        indicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
-        indicator.tex:Show()
-          
-        indicator:Show()
-        indicator:SetAlpha(1)
-        return false -- No LOS
-    end
-    
-    indicator:Hide()
-    return true -- has LOS
-end
-
-function pfUI.uf:RefreshHealIndicator(unit, unitstr)
-    -- Are they even enabled?
-    if not unit.config.heal_ind_20yd and not unit.config.heal_ind_10yd then
-        if unit.hp.bar.healIndicator then
-            unit.hp.bar.healIndicator:Hide()
-        end
-        return
-    end
-    
-    
-    if not pfUI.uf:CanAssist(unit, unitstr) or UnitIsDeadOrGhost(unitstr) then
-        if unit.hp.bar.healIndicator then
-            unit.hp.bar.healIndicator:Hide()
-        end
-        return
-    end
-    -- Heal indicator LOS
-    unit.hp.bar.healIndicator = unit.hp.bar.healIndicator or CreateFrame("Frame", nil, unit.hp.bar)
-    local indicator = unit.hp.bar.healIndicator
-    
-    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.heal_ind_size)
-    local healPos = unit.config.heal_ind_pos
-    
-    if healPos ~= indicator.pos then
-        indicator:ClearAllPoints()
-        indicator:SetPoint(healPos, 0, 0)
-        indicator.pos = healPos
-    end
-    
-    if size ~= indicator.size then
-        indicator:SetHeight(size)
-        indicator:SetWidth(size)
-        indicator.size = size
-    end
-    
-    local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
-            
-    -- 1: 20yd, 2: 10yd AOE
-    indicator.type = nil
-    local type20yd = 1
-    local type10yd = 2
-    local show10yd = unit.config.heal_ind_10yd
-    local show20yd = unit.config.heal_ind_20yd
-    local minHealthMissing10yd = tonumber(unit.config.heal_ind_10yd_hp)
-    local minHealthMissing20yd = tonumber(unit.config.heal_ind_20yd_hp)
-    local alpha = tonumber(unit.config.heal_ind_alpha)
-    
-    if show10yd and healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
-        indicator[type10yd] = indicator[type10yd] or CreateFrame("Frame", nil, indicator)
-        subIndicator = indicator[type10yd]
-        subIndicator:SetParent(indicator)
-        subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
-        subIndicator.tex:SetAllPoints(subIndicator)
-        if size ~= subIndicator.size then
-            subIndicator.tex:SetTexture(pfUI.media["img:Heal10"])
-            subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
-            subIndicator.tex:Show()
-            subIndicator:ClearAllPoints()
-            subIndicator:SetHeight(size)
-            subIndicator:SetWidth(size)
-            subIndicator:SetBackdrop(nil)
-            subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
-            subIndicator.size = size
-        end
-        subIndicator:Show()
-        subIndicator:SetAlpha(alpha)
-        indicator:Show()
-        indicator:SetAlpha(1)
-    elseif indicator[type10yd] then
-        indicator[type10yd]:Hide()
-    end
-    if show20yd and healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
-        indicator[type20yd] = indicator[type20yd] or CreateFrame("Frame", nil, indicator)
-        subIndicator = indicator[type20yd]
-        subIndicator:SetParent(indicator)
-        subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
-        subIndicator.tex:SetAllPoints(subIndicator)
-        if size ~= subIndicator.size then
-            subIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
-            subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
-            subIndicator.tex:Show()
-            subIndicator:ClearAllPoints()
-            subIndicator:SetHeight(size)
-            subIndicator:SetWidth(size)
-            subIndicator:SetBackdrop(nil)
-            subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
-            subIndicator.size = size
-        end
-        subIndicator:Show()
-        subIndicator:SetAlpha(alpha)
-        indicator:Show()
-        indicator:SetAlpha(1)
-    elseif indicator[type20yd] then
-        indicator[type20yd]:Hide()
-    end
+-- animates a health or power bar to its new value, or sets it at once
+local function SetBarValue(bar, value)
+  if C.unitframes.animatebars == "1" then
+    bar:SetSmoothedValue(value)
+  else
+    bar:ResetSmoothedValue(value)
+  end
 end
 
 function pfUI.uf:RefreshUnitState(unit)
   local alpha = unit.alpha_visible
   local unlock = pfUI.unlock and pfUI.unlock:IsShown() or nil
 
-  if not unlock then
-    local unitstr = unit.label .. unit.id
-    if not UnitIsConnected(unitstr) then
-        -- offline
-        alpha = unit.alpha_offline
-        unit.hp.bar:SetMinMaxValues(0, 100, true)
-        unit.power.bar:SetMinMaxValues(0, 100, true)
-        unit.hp.bar:SetValue(0)
-        unit.power.bar:SetValue(0)
-    elseif unit.config.faderange == "1" then
-        if not pfUI.api.UnitInRange(unitstr) then
-            alpha = unit.alpha_outrange
-            if unit.hp.bar.healIndicator then
-                unit.hp.bar.healIndicator:Hide()
-            end
-            if unit.hp.bar.noLosIndicator then
-                unit.hp.bar.noLosIndicator:Hide()
-            end
-        else
-            local hasLos = pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
-            if hasLos then
-                pfUI.uf:RefreshHealIndicator(unit, unitstr)
-            elseif unit.hp.bar.healIndicator then
-                unit.hp.bar.healIndicator:Hide()
-            end
-        end
-    else
-        if unit.hp.bar.healIndicator then
-            unit.hp.bar.healIndicator:Hide()
-        end
-        if unit.hp.bar.noLosIndicator then
-            unit.hp.bar.noLosIndicator:Hide()
-        end
-    end
+  if not UnitIsConnected(unit.label .. unit.id) and not unlock then
+    -- offline
+    alpha = unit.alpha_offline
+    unit.hp.bar:SetMinMaxValues(0, 100)
+    unit.power.bar:SetMinMaxValues(0, 100)
+    SetBarValue(unit.hp.bar, 0)
+    SetBarValue(unit.power.bar, 0)
+  elseif unit.config.faderange == "1" and not pfUI.api.UnitInRange(unit.label .. unit.id) and not unlock then
+    alpha = unit.alpha_outrange
   end
 
   -- skip if alpha is already correct
@@ -2233,16 +1706,40 @@ function pfUI.uf:RefreshUnitState(unit)
   end
 end
 
+-- the combat square and glow, where aggro shows over combat
+function pfUI.uf:RefreshCombat(unit)
+  local unitstr = unit.label .. unit.id
+  local config = unit.config
+  local aggro = unit.aggro and pfUI.api.UnitHasAggro(unitstr) > 0
+  local combat = UnitAffectingCombat(unitstr)
+
+  if config.squareaggro == "1" and aggro then
+    unit.combat.tex:SetColorTexture(1,.2,0)
+    unit.combat:Show()
+  elseif config.squarecombat == "1" and combat then
+    unit.combat.tex:SetColorTexture(1,1,.2)
+    unit.combat:Show()
+  else
+    unit.combat:Hide()
+  end
+
+  if config.glowaggro == "1" and aggro then
+    unit.glow:SetBackdropBorderColor(1,.2,0)
+    unit.glow:Show()
+  elseif config.glowcombat == "1" and combat then
+    unit.glow:SetBackdropBorderColor(1,1,.2)
+    unit.glow:Show()
+  else
+    unit.glow:Hide()
+  end
+end
+
 function pfUI.uf:RefreshIndicators(unit)
   if not unit.label or not unit.id then return end
   local unitstr = unit.label .. unit.id
 
   if unit.leaderIcon then -- Leader Icon
-    if unit.config.leadericon == "1" and UnitIsPartyLeader(unitstr) and ( GetNumPartyMembers() > 0 or GetNumRaidMembers() > 0 ) then
-      unit.leaderIcon:Show()
-    else
-      unit.leaderIcon:Hide()
-    end
+    unit.leaderIcon:SetShown(unit.config.leadericon == "1" and UnitIsPartyLeader(unitstr) and IsInGroup())
   end
 
   if unit.lootIcon then -- Loot Icon
@@ -2252,33 +1749,24 @@ function pfUI.uf:RefreshIndicators(unit)
       -- no third return value here.. but leaving this as a hint
       local method, group, raid = GetLootMethod()
       local name = group and UnitName(group == 0 and "player" or "party"..group) or raid and UnitName("raid"..raid) or nil
-
-      if name and name == UnitName(unitstr) then
-        unit.lootIcon:Show()
-      else
-        unit.lootIcon:Hide()
-      end
+      unit.lootIcon:SetShown(name and name == UnitName(unitstr))
     end
   end
 
   if unit.pvpIcon then -- PvP Icon
-    if unit.config.showPVP == "1" and UnitIsPVP(unitstr) then
-      unit.pvpIcon:Show()
-    else
-      unit.pvpIcon:Hide()
-    end
+    unit.pvpIcon:SetShown(unit.config.showPVP == "1" and UnitIsPVP(unitstr))
+  end
+
+  if unit.ressIcon then -- Resurrection Icon
+    unit.ressIcon:SetShown(libpredict:UnitHasResurrection(unitstr))
   end
 
   if unit.restIcon and unit:GetName() == "pfPlayer" then -- Rest Icon
-    if C.unitframes.player.showRest == "1" and UnitIsUnit(unitstr, "player") and IsResting() then
-      unit.restIcon:Show()
-    else
-      unit.restIcon:Hide()
-    end
+    unit.restIcon:SetShown(C.unitframes.player.showRest == "1" and UnitIsUnit(unitstr, "player") and IsResting())
   end
 
   if unit.happinessIcon and unit:GetName() == "pfPet" then -- Happiness Icon
-    local _, pclass = UnitClass("player")
+    local pclass = UnitClassBase("player")
     if unit.config.happinessicon == "0" or pclass ~= "HUNTER" then
       unit.happinessIcon:Hide()
     else
@@ -2312,12 +1800,60 @@ function pfUI.uf:RefreshIndicators(unit)
   end
 end
 
-local pfDebuffColors = {
-  ["Magic"]   = { 0.1, 0.7, 0.8, 1 },
-  ["Poison"]  = { 0.2, 0.7, 0.3, 1 },
-  ["Curse"]   = { 0.6, 0.2, 0.6, 1 },
-  ["Disease"] = { 0.9, 0.7, 0.2, 1 }
+-- Druid secondary mana bar update. Reads base mana with ClassicAPI
+-- UnitPower/UnitPowerMax(unit, Enum.PowerType.Mana), which return the mana
+-- slot regardless of the unit's active power -- so it works while shapeshifted,
+-- with no nampower/GetUnitField dependency. Shown only while off mana
+-- (Cat=energy, Bear=rage); non-player frames only for druid units.
+function pfUI.uf:UpdateDruidMana(unit)
+  local bar = unit.druidmana
+  local unitstr = unit.label .. unit.id
+  if not UnitExists(unitstr) then bar:Hide() return end
+  if unit.label ~= "player" then
+    local cls = UnitClassBase(unitstr)
+    if cls ~= "DRUID" then bar:Hide() return end
+  end
+  if UnitPowerType(unitstr) == Enum.PowerType.Mana then bar:Hide() return end
+  local mana, maxmana = UnitPower(unitstr, Enum.PowerType.Mana), UnitPowerMax(unitstr, Enum.PowerType.Mana)
+  if not maxmana or maxmana == 0 then bar:Hide() return end
+  bar:SetMinMaxValues(0, maxmana)
+  bar:SetValue(mana)
+  if C.unitframes.druidmanatext == "1" then
+    bar.text:SetText(pfUI.api.Abbreviate(mana) .. "/" .. pfUI.api.Abbreviate(maxmana))
+  else
+    bar.text:SetText("")
+  end
+  bar:Show()
+end
+
+-- the class icon sheets of the class portrait styles, both laid out by
+-- CLASS_ICON_TCOORDS: pfUI's round icons and the stock character creation ones
+local classicons = {
+  ["classround"] = "img:classicons",
+  ["classsquare"] = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes",
 }
+
+-- shows the portrait as a texture: a player's class icon with a class style,
+-- the 2D portrait otherwise
+local function ShowPortraitTexture(portrait, unitstr)
+  local _, class = UnitClass(unitstr)
+  local sheet = classicons[C.unitframes.portraitstyle]
+  local coords = sheet and UnitIsPlayer(unitstr) and CLASS_ICON_TCOORDS[class]
+
+  if coords then
+    -- crop the icon's rim the way the 2D portrait is cropped
+    local left, right, top, bottom = unpack(coords)
+    local x, y = (right - left) * .1, (bottom - top) * .1
+    portrait.tex:SetTexture(pfUI.media[sheet])
+    portrait.tex:SetTexCoord(left + x, right - x, top + y, bottom - y)
+  else
+    portrait.tex:SetTexCoord(.1, .9, .1, .9)
+    SetPortraitTexture(portrait.tex, unitstr)
+  end
+
+  portrait.tex:Show()
+  portrait.model:Hide()
+end
 
 function pfUI.uf:RefreshUnit(unit, component)
   -- break early on misconfigured UF's
@@ -2325,12 +1861,7 @@ function pfUI.uf:RefreshUnit(unit, component)
   if not unit.hp then return end
   if not unit.power then return end
   if not unit.id then unit.id = "" end
-  local component = component or ""
-
-  -- don't update scanner activity
-  if unit.label == "target" or unit.label == "targettarget" or unit.label == "targettargettarget" then
-    if pfScanActive == true then return end
-  end
+  component = component or ""
 
   -- hide unused and invalid frames
   unit:UpdateVisibility()
@@ -2347,124 +1878,70 @@ function pfUI.uf:RefreshUnit(unit, component)
 
   -- buffs
   if unit.buffs and ( component == "all" or component == "aura" ) then
-    local texture, stacks
-
+    -- one GetAuraSlots enumeration per refresh, then a positional read per
+    -- slot id: allocates nothing and never re-walks the aura array per icon
+    ScanAuraSlots(unitstr, "HELPFUL", auraSlots, unit.config.bufflimit)
     for i=1, unit.config.bufflimit do
       if not unit.buffs[i] then break end
 
-      if unit.label == "player" then
-        stacks = GetPlayerBuffApplications(GetPlayerBuff(PLAYER_BUFF_START_ID+i,"HELPFUL"))
-        texture = GetPlayerBuffTexture(GetPlayerBuff(PLAYER_BUFF_START_ID+i,"HELPFUL"))
-      else
-        texture, stacks = pfUI.uf:DetectBuff(unitstr, i)
-      end
+      local name, icon, count, _, duration, expirationTime, _, _, _, spellId = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
 
-      unit.buffs[i].texture:SetTexture(texture)
-
-      if texture then
+      if name then
+        unit.buffs[i].slot = auraSlots[i]
+        unit.buffs[i].texture:SetTexture(icon)
         unit.buffs[i]:Show()
 
-        if stacks > 1 then
-          unit.buffs[i].stacks:SetText(stacks)
+        if count > 1 then
+          unit.buffs[i].stacks:SetText(count)
         else
           unit.buffs[i].stacks:SetText("")
         end
+
+        unit.buffs[i].auraStart, unit.buffs[i].auraDuration = GetAuraTimer(duration, expirationTime)
       else
         unit.buffs[i]:Hide()
       end
+    end
+
+    -- own buffs lead the list; count them only when they're drawn larger
+    if unit.buffs.ownsize ~= unit.buffs.size then
+      unit.buffs.own = ScanAuraSlots(unitstr, "HELPFUL|PLAYER", auraSlots, unit.config.bufflimit)
     end
   end
 
   -- debuffs
   if unit.debuffs and ( component == "all" or component == "aura" ) then
     local texture, stacks, dtype
-    local perrow = unit.config.debuffperrow
-    local bperrow = unit.config.buffperrow
     local selfdebuff = unit.config.selfdebuff
 
-    local invert_h, invert_v, af
-    if unit.config.debuffs == "TOPLEFT" then
-      invert_h = 1
-      invert_v = 1
-      af = "BOTTOMLEFT"
-    elseif unit.config.debuffs == "BOTTOMLEFT" then
-      invert_h = -1
-      invert_v = 1
-      af = "TOPLEFT"
-    elseif unit.config.debuffs == "TOPRIGHT" then
-      invert_h = 1
-      invert_v = -1
-      af = "BOTTOMRIGHT"
-    elseif unit.config.debuffs == "BOTTOMRIGHT" then
-      invert_h = -1
-      invert_v = -1
-      af = "TOPRIGHT"
-    end
-
-    local buffrow, reposition = 0, ( component == "all" and true or nil )
-    if unit.config.buffs == unit.config.debuffs then
-      if unit.buffs[0*bperrow+1] and unit.buffs[0*bperrow+1]:IsShown() then buffrow = buffrow + 1 end
-      if unit.buffs[1*bperrow+1] and unit.buffs[1*bperrow+1]:IsShown() then buffrow = buffrow + 1 end
-      if unit.buffs[2*bperrow+1] and unit.buffs[2*bperrow+1]:IsShown() then buffrow = buffrow + 1 end
-      if unit.buffs[3*bperrow+1] and unit.buffs[3*bperrow+1]:IsShown() then buffrow = buffrow + 1 end
-    end
-
-    if buffrow ~= unit.lastbuffrow then
-      unit.lastbuffrow = buffrow
-      reposition = true
-    end
+    -- selfdebuff narrows to player-cast harmful auras via the PLAYER filter.
+    -- Player-frame debuffs aren't gated on it (it'd hide most party-applied
+    -- effects on you). One GetAuraSlots enumeration per refresh; the i-th slot
+    -- is the i-th aura of the filtered list, so `i` stays the tooltip index.
+    local filter = (unit.label ~= "player" and selfdebuff == "1") and "HARMFUL|PLAYER" or "HARMFUL"
+    ScanAuraSlots(unitstr, filter, auraSlots, unit.config.debufflimit)
 
     for i=1, unit.config.debufflimit do
       if not unit.debuffs[i] then break end
 
-      local row = floor((i-1) / unit.config.debuffperrow)
-
-      if reposition then
-        local anchor = unit.config.portraitheight ~= "-1" and unit.hp or unit
-        if anchor == unit.hp and (unit.config.debuffs == "BOTTOMLEFT" or unit.config.debuffs == "BOTTOMRIGHT") then
-          anchor = unit.power
-        end
-        local multiply = C.appearance.border.force_blizz == "1" and 1 or 2
-        unit.debuffs[i]:SetPoint(af, anchor, unit.config.debuffs,
-        invert_v * (i-1-row*perrow)*(multiply*default_border + unit.config.debuffsize + 1),
-        invert_h * ((row+buffrow)*(multiply*default_border + unit.config.debuffsize + 1) + (multiply*default_border + 1)))
-      end
-
-      if unit.label == "player" then
-        texture = GetPlayerBuffTexture(GetPlayerBuff(PLAYER_BUFF_START_ID+i, "HARMFUL"))
-        stacks = GetPlayerBuffApplications(GetPlayerBuff(PLAYER_BUFF_START_ID+i, "HARMFUL"))
-        dtype = GetPlayerBuffDispelType(GetPlayerBuff(PLAYER_BUFF_START_ID+i, "HARMFUL"))
-      elseif selfdebuff == "1" then
-        _, _, texture, stacks, dtype = libdebuff:UnitOwnDebuff(unitstr, i)
+      -- positional read by slot id allocates nothing
+      local name, icon, count, dispelType, duration, expirationTime = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
+      if name then
+        texture, stacks, dtype = icon, count, dispelType
       else
-        texture, stacks, dtype = UnitDebuff(unitstr, i)
+        texture, stacks, dtype = nil, 0, nil
       end
 
       unit.debuffs[i].texture:SetTexture(texture)
 
-      local r,g,b = DebuffTypeColor.none.r,DebuffTypeColor.none.g,DebuffTypeColor.none.b
-      if dtype and DebuffTypeColor[dtype] then
-        r,g,b = DebuffTypeColor[dtype].r,DebuffTypeColor[dtype].g,DebuffTypeColor[dtype].b
-      end
-      unit.debuffs[i].backdrop:SetBackdropBorderColor(r,g,b,1)
+      local dispelColor = C_UnitAuras.GetAuraDispelTypeColor(dtype or "")
+      unit.debuffs[i].backdrop:SetBackdropBorderColor(dispelColor:GetRGBA())
 
       if texture then
+        unit.debuffs[i].slot = auraSlots[i]
         unit.debuffs[i]:Show()
 
-        if unit:GetName() == "pfPlayer" then
-          local timeleft = GetPlayerBuffTimeLeft(GetPlayerBuff(PLAYER_BUFF_START_ID+unit.debuffs[i].id, "HARMFUL"),"HARMFUL")
-          CooldownFrame_SetTimer(unit.debuffs[i].cd, GetTime(), timeleft, 1)
-        elseif libdebuff and selfdebuff == "1" then
-          local name, rank, texture, stacks, dtype, duration, timeleft, caster = libdebuff:UnitOwnDebuff(unitstr, i)
-          if duration and timeleft then
-            CooldownFrame_SetTimer(unit.debuffs[i].cd, GetTime() + timeleft - duration, duration, 1)
-          end
-        elseif libdebuff then
-          local name, rank, texture, stacks, dtype, duration, timeleft, caster = libdebuff:UnitDebuff(unitstr, i)
-          if duration and timeleft then
-            CooldownFrame_SetTimer(unit.debuffs[i].cd, GetTime() + timeleft - duration, duration, 1)
-          end
-        end
+        unit.debuffs[i].auraStart, unit.debuffs[i].auraDuration = GetAuraTimer(duration, expirationTime)
 
         if stacks > 1 then
           unit.debuffs[i].stacks:SetText(stacks)
@@ -2475,6 +1952,22 @@ function pfUI.uf:RefreshUnit(unit, component)
         unit.debuffs[i]:Hide()
       end
     end
+
+    -- own debuffs lead the list; count them only when they're drawn larger
+    if unit.debuffs.ownsize ~= unit.debuffs.size then
+      unit.debuffs.own = ScanAuraSlots(unitstr, "HARMFUL|PLAYER", auraSlots, unit.config.debufflimit)
+    end
+  end
+
+  -- timers start after the layout so each cooldown text is sized to its icon
+  if component == "all" or component == "aura" then
+    LayoutAuras(unit, unitstr)
+    StartAuraTimers(unit.buffs)
+    StartAuraTimers(unit.debuffs)
+    pfUI.events:TriggerEvent("unitframe:auras", unit)
+  elseif component == "auratime" then
+    RetimeAuras(unit.buffs, unitstr)
+    RetimeAuras(unit.debuffs, unitstr)
   end
 
   -- indicators
@@ -2485,151 +1978,121 @@ function pfUI.uf:RefreshUnit(unit, component)
       unit.dispellable = {}
     end
 
-    local canAssist = pfUI.uf:CanAssist(unit, unitstr)
-    local isCharmedFriend = (unit:GetRaidFrameId() > 0 or not canAssist) and pfUI.api.IsUnitCharmed(unitstr)
-    
     if table.getn(unit.dispellable) > 0 then
-      if canAssist then
-          unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
+      unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
 
-          -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
-          local disptype = unit.config.debuff_indicator
-          local indicator = unit.hp.bar.debuffindicators
-          local indipos = unit.config.debuff_ind_pos
-          local count = 0
-          local size
+      -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
+      local disptype = unit.config.debuff_indicator
+      local indicator = unit.hp.bar.debuffindicators
+      local indipos = unit.config.debuff_ind_pos
+      local count = 0
+      local size
 
-          if disptype == "4" or disptype == "3" then
-            size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
-            if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
-              indicator:ClearAllPoints()
-              indicator:SetPoint(indipos, 0, 0)
-              indicator:SetHeight(size)
-              indicator:SetWidth(size)
-              indicator.size = size
-              indicator.disp = disptype
-              indicator.ipos  = indipos
-            end
-          elseif disptype == "2" or disptype == "1" then
-            size = "FULL"
-            if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
-              indicator:ClearAllPoints()
-              indicator:SetAllPoints(unit.hp.bar)
-              indicator.size = size
-              indicator.disp = disptype
-              indicator.ipos = indipos
-            end
-          end
-
-          for _, debuff in pairs(unit.dispellable) do
-            indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
-            indicator[debuff]:SetParent(indicator)
-            indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
-            indicator[debuff].tex:SetAllPoints(indicator[debuff])
-
-            if indicator.size ~= indicator[debuff].size or disptype ~= indicator[debuff].disp then
-              if disptype == "4" then
-                indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
-                indicator[debuff].tex:SetVertexColor(unpack(pfDebuffColors[debuff]))
-                indicator[debuff].tex:Show()
-                indicator[debuff]:ClearAllPoints()
-                indicator[debuff]:SetHeight(size)
-                indicator[debuff]:SetWidth(size)
-                indicator[debuff]:SetBackdrop(nil)
-              elseif disptype == "3" then
-                indicator[debuff].tex:SetTexture(unpack(pfDebuffColors[debuff]))
-                indicator[debuff].tex:SetVertexColor(1,1,1,1)
-                indicator[debuff].tex:Show()
-                indicator[debuff]:ClearAllPoints()
-                indicator[debuff]:SetHeight(size)
-                indicator[debuff]:SetWidth(size)
-                indicator[debuff]:SetBackdrop(nil)
-              elseif disptype == "2" then
-                indicator[debuff].tex:Hide()
-                indicator[debuff]:SetAllPoints(unit.hp.bar)
-                indicator[debuff]:SetBackdrop(glow)
-                indicator[debuff]:SetBackdropBorderColor(unpack(pfDebuffColors[debuff]))
-              elseif disptype == "1" then
-                indicator[debuff].tex:SetTexture(unpack(pfDebuffColors[debuff]))
-                indicator[debuff].tex:SetVertexColor(1,1,1,1)
-                indicator[debuff].tex:Show()
-                indicator[debuff]:SetAllPoints(unit.hp.bar)
-                indicator[debuff]:SetBackdrop(nil)
-              end
-
-              indicator[debuff].size = indicator.size
-              indicator[debuff].disp = indicator.disp
-            end
-
-            indicator[debuff].visible = nil
-
-            for i=1,16 do
-              local _, _, dtype = UnitDebuff(unitstr, i)
-              if dtype == debuff then
-                indicator[debuff].visible = true
-              end
-            end
-
-            if indicator[debuff].visible then
-              indicator[debuff]:Show()
-              indicator:Show()
-              indicator:SetAlpha(0)
-              if disptype == "4" or disptype == "3" then
-                indicator:SetAlpha(1)
-              elseif disptype == "2" then
-                indicator:SetAlpha(.4)
-              elseif disptype == "1" then
-                indicator:SetAlpha(.2)
-              end
-
-              if disptype == "4" or disptype == "3" then
-                indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", count*(size+1), 0)
-                count = count + 1
-              end
-            else
-              indicator[debuff]:Hide()
-            end
-          end
-
-          if disptype == "4" or disptype == "3" then
-            indicator:SetWidth(count*(size+1))
-          end
-        elseif unit.hp.bar.debuffindicators then
-          unit.hp.bar.debuffindicators:Hide()
+      if disptype == "4" or disptype == "3" then
+        size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
+        if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
+          indicator:ClearAllPoints()
+          indicator:SetPoint(indipos, 0, 0)
+          indicator:SetSize(size, size)
+          indicator.size = size
+          indicator.disp = disptype
+          indicator.ipos  = indipos
         end
+      elseif disptype == "2" or disptype == "1" then
+        size = "FULL"
+        if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
+          indicator:ClearAllPoints()
+          indicator:SetAllPoints(unit.hp.bar)
+          indicator.size = size
+          indicator.disp = disptype
+          indicator.ipos = indipos
+        end
+      end
+
+      -- Scan the 16 harmful slots once into a reusable set, instead of
+      -- re-scanning all 16 for every dispellable type below. Reused across
+      -- frames (populated and consumed within this single RefreshUnit call).
+      local present = pfUI.uf.dispelPresent or {}
+      pfUI.uf.dispelPresent = present
+      for k in pairs(present) do present[k] = nil end
+      local n = ScanAuraSlots(unitstr, "HARMFUL", auraSlots)
+      for i=1,n do
+        local name, _, _, dispelType = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
+        if name and dispelType and dispelType ~= "" then present[dispelType] = true end
+      end
+
+      for _, debuff in pairs(unit.dispellable) do
+        indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
+        indicator[debuff]:SetParent(indicator)
+        indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
+        indicator[debuff].tex:SetAllPoints(indicator[debuff])
+
+        if indicator.size ~= indicator[debuff].size or disptype ~= indicator[debuff].disp then
+          local dispelColor = C_UnitAuras.GetAuraDispelTypeColor(debuff)
+          if disptype == "4" then
+            indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
+            indicator[debuff].tex:SetVertexColor(dispelColor:GetRGBA())
+            indicator[debuff].tex:Show()
+            indicator[debuff]:ClearAllPoints()
+            indicator[debuff]:SetSize(size, size)
+            indicator[debuff]:SetBackdrop(nil)
+          elseif disptype == "3" then
+            indicator[debuff].tex:SetColorTexture(dispelColor:GetRGBA())
+            indicator[debuff].tex:SetVertexColor(1,1,1,1)
+            indicator[debuff].tex:Show()
+            indicator[debuff]:ClearAllPoints()
+            indicator[debuff]:SetSize(size, size)
+            indicator[debuff]:SetBackdrop(nil)
+          elseif disptype == "2" then
+            indicator[debuff].tex:Hide()
+            indicator[debuff]:SetAllPoints(unit.hp.bar)
+            indicator[debuff]:SetBackdrop(glow)
+            indicator[debuff]:SetBackdropBorderColor(dispelColor:GetRGBA())
+          elseif disptype == "1" then
+            indicator[debuff].tex:SetColorTexture(dispelColor:GetRGBA())
+            indicator[debuff].tex:SetVertexColor(1,1,1,1)
+            indicator[debuff].tex:Show()
+            indicator[debuff]:SetAllPoints(unit.hp.bar)
+            indicator[debuff]:SetBackdrop(nil)
+          end
+
+          indicator[debuff].size = indicator.size
+          indicator[debuff].disp = indicator.disp
+        end
+
+        indicator[debuff].visible = present[debuff]
+
+        if indicator[debuff].visible then
+          indicator[debuff]:Show()
+          indicator:Show()
+          indicator:SetAlpha(0)
+          if disptype == "4" or disptype == "3" then
+            indicator:SetAlpha(1)
+          elseif disptype == "2" then
+            indicator:SetAlpha(.4)
+          elseif disptype == "1" then
+            indicator:SetAlpha(.2)
+          end
+
+          if disptype == "4" or disptype == "3" then
+            indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", count*(size+1), 0)
+            count = count + 1
+          end
+        else
+          indicator[debuff]:Hide()
+        end
+      end
+
+      if disptype == "4" or disptype == "3" then
+        indicator:SetWidth(count*(size+1))
+      end
     elseif unit.hp.bar.debuffindicators then
       unit.hp.bar.debuffindicators:Hide()
     end
-    
-    if isCharmedFriend and unit.config.charm_ind then
-        unit.hp.bar.mcIndicator = unit.hp.bar.mcIndicator or CreateFrame("Frame", nil, unit.hp.bar)
-        local indicator = unit.hp.bar.mcIndicator
-        local indipos = unit.config.charm_ind_pos
-        local size = unit.hp.bar:GetHeight() * tonumber(unit.config.charm_ind_size)
-        
-        indicator.tex = indicator.tex or indicator:CreateTexture(nil)
-        indicator.tex:SetAllPoints(indicator)
-        
-        if size ~= indicator.size or indipos ~= indicator.ipos then
-            indicator.tex:SetTexture(pfUI.media["img:Mindcontrol"])
-            indicator.tex:SetVertexColor(0.5, 0.0, 0.0, 1)
-            indicator.tex:Show()
-            indicator:ClearAllPoints()
-            indicator:SetHeight(size)
-            indicator:SetWidth(size)
-            indicator:SetPoint(indipos, 0, 0)
-            indicator:SetBackdrop(nil)
-            
-            indicator.size = size
-            indicator.ipos = indipos
-        end
-        
-        indicator:Show()
-        indicator:SetAlpha(1)
-    elseif unit.hp.bar.mcIndicator then
-        unit.hp.bar.mcIndicator:Hide()
-    end
+  end
 
+  -- buff indicators carry timers and stacks, so a re-time redraws them too
+  if component == "all" or component == "aura" or component == "auratime" then
     if not unit.indicators and unit.config.buff_indicator == "1" then
       unit.indicators = pfUI.uf:SetupBuffIndicators(unit.config)
     elseif not unit.indicators then
@@ -2638,8 +2101,8 @@ function pfUI.uf:RefreshUnit(unit, component)
 
     if not unit.indicator_custom and unit.config.buff_indicator == "1" then
       unit.indicator_custom = {}
-      for k, v in pairs({strsplit("#", unit.config.custom_indicator)}) do
-        unit.indicator_custom[k] = string.lower(v)
+      for _, v in pairs({strsplit("#", unit.config.custom_indicator)}) do
+        if v ~= "" then table.insert(unit.indicator_custom, v:lower()) end
       end
     elseif not unit.indicator_custom then
       unit.indicator_custom = {}
@@ -2647,106 +2110,54 @@ function pfUI.uf:RefreshUnit(unit, component)
 
     local pos = 1
     if table.getn(unit.indicators) > 0 then
-      for i=1,32 do
-        local texture, count = UnitBuff(unitstr, i)
-        local timeleft, buffName, _
-        if pfUI.client > 11200 then
-          buffName, _, texture, _, _, timeleft = _G.UnitBuff(unitstr, i)
-        end
+      local n = ScanAuraSlots(unitstr, "HELPFUL", auraSlots)
+      for i=1,n do
+        local name, icon, count, _, duration, expirationTime = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
+        if not name then break end
+        local timeleft = expirationTime > 0 and (expirationTime - GetTime()) or nil
 
-        if texture then
-          -- match filter
-          for _, filter in pairs(unit.indicators) do
-            if filter == string.lower(texture) then
-              if string.lower(texture) == "interface\\icons\\spell_nature_rejuvenation" then
-                -- Also verify spell name to avoid false matches from spells sharing this icon
-                if not buffName then
-                  scanner = scanner or libtipscan:GetScanner("unitframes")
-                  scanner:SetUnitBuff(unitstr, i)
-                  buffName = scanner:Line(1) or ""
-                end
-                if string.lower(buffName) ~= "rejuvenation" then break end
-                local start, duration, prediction = libpredict:GetHotDuration(unitstr, "Reju")
-                pfUI.uf:AddIcon(unit, pos, texture, timeleft or prediction, count, tonumber(start), tonumber(duration))
-                pos = pos + 1
-                break
-              elseif string.lower(texture) == "interface\\icons\\spell_holy_renew" then
-                local start, duration, prediction = libpredict:GetHotDuration(unitstr, "Renew")
-                pfUI.uf:AddIcon(unit, pos, texture, timeleft or prediction, count, tonumber(start), tonumber(duration))
-                pos = pos + 1
-                break
-              elseif string.lower(texture) == "interface\\icons\\spell_nature_resistnature" then
-                -- Also verify spell name to avoid false matches from spells sharing this icon
-                if not buffName then
-                  scanner = scanner or libtipscan:GetScanner("unitframes")
-                  scanner:SetUnitBuff(unitstr, i)
-                  buffName = scanner:Line(1) or ""
-                end
-                if string.lower(buffName) ~= "regrowth" then break end
-                local start, duration, prediction = libpredict:GetHotDuration(unitstr, "Regr")
-                pfUI.uf:AddIcon(unit, pos, texture, timeleft or prediction, count, tonumber(start), tonumber(duration))
-                pos = pos + 1
-                break
-              else
-                pfUI.uf:AddIcon(unit, pos, texture, timeleft, count)
-                pos = pos + 1
-                break
-              end
+        for _, filter in pairs(unit.indicators) do
+          if filter.icon == icon and filter.name == name then
+            if filter.predict then
+              local start, duration, prediction = libpredict:GetHotDuration(unitstr, filter.predict)
+              pfUI.uf:AddIcon(unit, pos, icon, timeleft or prediction, count, tonumber(start), tonumber(duration))
+            else
+              pfUI.uf:AddIcon(unit, pos, icon, timeleft, count, GetAuraTimer(duration, expirationTime))
             end
+            pos = pos + 1
+            break
           end
         end
       end
     end
 
     if table.getn(unit.indicator_custom) > 0 then
-      scanner = scanner or libtipscan:GetScanner("unitframes")
-
-      for i=1,32 do -- scan for custom buffs
-        local texture, count = UnitBuff(unitstr, i)
-        if texture then
-          local timeleft, name, _
-          if pfUI.client > 11200 then
-            name, _, texture, _, _, timeleft = _G.UnitBuff(unitstr, i)
-          else
-            scanner:SetUnitBuff(unitstr, i)
-            name = scanner:Line(1) or ""
-          end
-
-          -- match filter
-          for _, filter in pairs(unit.indicator_custom) do
-            if filter == string.lower(name) then
-              pfUI.uf:AddIcon(unit, pos, texture, timeleft, count)
-              pos = pos + 1
-              break
-            end
+      local n = ScanAuraSlots(unitstr, "HELPFUL", auraSlots)
+      for i=1,n do
+        local name, icon, count, _, duration, expirationTime = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
+        if not name then break end
+        local timeleft = expirationTime > 0 and (expirationTime - GetTime()) or nil
+        local lowerName = name:lower()
+        for _, filter in pairs(unit.indicator_custom) do
+          if filter == lowerName then
+            pfUI.uf:AddIcon(unit, pos, icon, timeleft, count, GetAuraTimer(duration, expirationTime))
+            pos = pos + 1
+            break
           end
         end
       end
 
-      for i=1,32 do -- scan for custom debuffs
-        local texture, count = UnitDebuff(unitstr, i)
-        if texture then
-          local timeleft, name, _
-          if libdebuff then
-            -- Use UnitOwnDebuff if "show only own debuffs" is enabled
-            if unit.config.selfdebuff == "1" then
-              name, _, texture, _, _, _, timeleft = libdebuff:UnitOwnDebuff(unitstr, i)
-            else
-              name, _, texture, _, _, _, timeleft = libdebuff:UnitDebuff(unitstr, i)
-            end
-          else
-            scanner:SetUnitDebuff(unitstr, i)
-            name = scanner:Line(1) or ""
-          end
-
-          -- match filter
-          if name then
-            for _, filter in pairs(unit.indicator_custom) do
-              if filter == string.lower(name) then
-                pfUI.uf:AddIcon(unit, pos, texture, timeleft, count)
-                pos = pos + 1
-                break
-              end
+      local debuffFilter = unit.config.selfdebuff == "1" and "HARMFUL|PLAYER" or "HARMFUL"
+      n = ScanAuraSlots(unitstr, debuffFilter, auraSlots)
+      for i=1,n do -- scan for custom debuffs
+        local name, icon, count, _, duration, expirationTime = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
+        if name then
+          local timeleft = expirationTime > 0 and (expirationTime - GetTime()) or nil
+          for _, filter in pairs(unit.indicator_custom) do
+            if filter == name:lower() then
+              pfUI.uf:AddIcon(unit, pos, icon, timeleft, count, GetAuraTimer(duration, expirationTime))
+              pos = pos + 1
+              break
             end
           end
         end
@@ -2759,53 +2170,53 @@ function pfUI.uf:RefreshUnit(unit, component)
 
   -- portrait
   if unit.portrait and ( component == "all" or component == "portrait" ) then
-    if C.unitframes.always2dportrait == "1" then
-      unit.portrait.tex:Show()
-      unit.portrait.model:Hide()
-      SetPortraitTexture(unit.portrait.tex, unitstr)
-    else
-      if not UnitIsVisible(unitstr) or not UnitIsConnected(unitstr) then
-        if unit.config.portrait == "bar" then
-          unit.portrait.tex:Hide()
-          unit.portrait.model:Hide()
-        elseif C.unitframes.portraittexture == "1" then
-          unit.portrait.tex:Show()
-          unit.portrait.model:Hide()
-          SetPortraitTexture(unit.portrait.tex, unitstr)
-        else
-          unit.portrait.tex:Hide()
-          unit.portrait.model:Show()
-          unit.portrait.model:SetModelScale(4.25)
-          unit.portrait.model:SetPosition(0, 0, -1)
-          unit.portrait.model:SetModel("Interface\\Buttons\\talktomequestionmark.mdx")
-        end
+    if C.unitframes.portraitstyle ~= "3d" then
+      ShowPortraitTexture(unit.portrait, unitstr)
+    elseif not UnitIsVisible(unitstr) or not UnitIsConnected(unitstr) then
+      if unit.config.portrait == "bar" then
+        unit.portrait.tex:Hide()
+        unit.portrait.model:Hide()
+      elseif C.unitframes.portraittexture == "1" then
+        ShowPortraitTexture(unit.portrait, unitstr)
       else
-        if unit.config.portrait == "bar" then
-          unit.portrait:SetAlpha(C.unitframes.portraitalpha)
-        else
-          unit.portrait:SetAlpha(1)
-        end
         unit.portrait.tex:Hide()
         unit.portrait.model:Show()
+        unit.portrait.model:SetModelScale(4.25)
+        unit.portrait.model:SetPosition(0, 0, -1)
+        unit.portrait.model:SetModel("Interface\\Buttons\\talktomequestionmark.mdx")
+      end
+    else
+      if unit.config.portrait == "bar" then
+        unit.portrait:SetAlpha(C.unitframes.portraitalpha)
+      else
+        unit.portrait:SetAlpha(1)
+      end
+      unit.portrait.tex:Hide()
+      unit.portrait.model:Show()
 
-        if component == "portrait" then
-          -- regular portrait update after event
+      if component == "portrait" then
+        -- regular portrait update after event
+        unit.portrait.model.update = unitstr
+      else
+        -- detect portrait change without events
+        unit.portrait.model.next:SetUnit(unitstr)
+        if unit.portrait.model.lastUnit ~= UnitName(unitstr) or unit.portrait.model:GetModel() ~= unit.portrait.model.next:GetModel() then
           unit.portrait.model.update = unitstr
-        else
-          -- detect portrait change without events
-          unit.portrait.model.next:SetUnit(unitstr)
-          if unit.portrait.model.lastUnit ~= UnitName(unitstr) or unit.portrait.model:GetModel() ~= unit.portrait.model.next:GetModel() then
-            unit.portrait.model.update = unitstr
-          end
         end
       end
     end
   end
 
+  -- a new unit brings its own icons and combat state
+  if component == "all" then
+    pfUI.uf:RefreshIndicators(unit)
+    pfUI.uf:RefreshCombat(unit)
+  end
+
   -- base frame
   if component == "all" or component == "base" then
     -- Unit HP/MP with Nampower Integration
-    local hp, hpmax, power, powermax, powerType = pfUI.api.GetUnitStats(unitstr, true)
+    local hp, hpmax, power, powermax, powerType = pfUI.api.GetUnitStats(unitstr)
     
     -- Store original values for color calculations (before invert_healthbar modifies hp)
     local hp_orig, hpmax_orig = hp, hpmax
@@ -2814,11 +2225,11 @@ function pfUI.uf:RefreshUnit(unit, component)
       hp = hpmax - hp
     end
 
-    unit.hp.bar:SetMinMaxValues(0, hpmax, true)
-    unit.hp.bar:SetValue(hp)
+    unit.hp.bar:SetMinMaxValues(0, hpmax)
+    SetBarValue(unit.hp.bar, hp)
 
-    unit.power.bar:SetMinMaxValues(0, powermax, true)
-    unit.power.bar:SetValue(power)
+    unit.power.bar:SetMinMaxValues(0, powermax)
+    SetBarValue(unit.power.bar, power)
 
     -- Hide power bar text for NPCs without real power (power == 0)
     local isNPC = not UnitIsPlayer(unitstr) and not UnitPlayerControlled(unitstr)
@@ -2838,9 +2249,7 @@ function pfUI.uf:RefreshUnit(unit, component)
       custom_active = true
     elseif custom == "0" then
       if UnitIsPlayer(unitstr) then
-        local _, class = UnitClass(unitstr)
-        local color = RAID_CLASS_COLORS[class]
-        if color then r, g, b = color.r, color.g, color.b end
+        _, r, g, b = GetUnitColor(unitstr)
       elseif unit.label == "pet" then
         local happiness = GetPetHappiness()
         if happiness == 1 then
@@ -2891,13 +2300,13 @@ function pfUI.uf:RefreshUnit(unit, component)
 
     local r, g, b, a = .5, .5, .5, 1
     local utype = UnitPowerType(unitstr)
-    if utype == 0 then
+    if utype == Enum.PowerType.Mana then
       r, g, b, a = GetStringColor(mana)
-    elseif utype == 1 then
+    elseif utype == Enum.PowerType.Rage then
       r, g, b, a = GetStringColor(rage)
-    elseif utype == 2 then
+    elseif utype == Enum.PowerType.Focus then
       r, g, b, a = GetStringColor(focus)
-    elseif utype == 3 then
+    elseif utype == Enum.PowerType.Energy then
       r, g, b, a = GetStringColor(energy)
     end
 
@@ -2933,17 +2342,11 @@ function pfUI.uf:RefreshUnit(unit, component)
       end
     end
 
+    if unit.druidmana then pfUI.uf:UpdateDruidMana(unit) end
+
     pfUI.uf:RefreshUnitState(unit)
   end
 end
-
-local buttons = {
-  [1] = "LeftButton",
-  [2] = "RightButton",
-  [3] = "MiddleButton",
-  [4] = "Button4",
-  [5] = "Button5",
-}
 
 local modifiers = {
   [""] = "",
@@ -2954,115 +2357,35 @@ local modifiers = {
 
 function pfUI.uf:EnableClickCast()
   if self.config.clickcast ~= "1" then return end
-  for bid, button in pairs(buttons) do
+  for bid = 1, 5 do -- LeftButton, RightButton, MiddleButton, Button4, Button5
     for modifier, mconf in pairs(modifiers) do
       local bconf = bid == 1 and "" or bid
-      if pfUI_config.unitframes["clickcast"..bconf..mconf] ~= "" then
-        -- prepare click casting
-        if pfUI.client > 11200 then
-          -- set attributes for tbc+
-          local prefix = modifier == "" and "" or modifier .. "-"
-
-          -- check for "/" in the beginning of the string, to detect macros
-          local ccval = pfUI_config.unitframes["clickcast"..bconf..mconf]
-          local ccval_lower = string.lower(ccval)
-          if string.find(ccval, "^%/(.+)") then
-            self:SetAttribute(prefix.."type"..bid, "macro")
-            self:SetAttribute(prefix.."macrotext"..bid, ccval)
-            self:SetAttribute(prefix.."spell"..bid, nil)
-          elseif string.find(ccval_lower, "^target") then
-            self:SetAttribute(prefix.."type"..bid, "target")
-            self:SetAttribute(prefix.."macrotext"..bid, nil)
-            self:SetAttribute(prefix.."spell"..bid, nil)
-          elseif string.find(ccval_lower, "^menu") then
-            self:SetAttribute(prefix.."type"..bid, "showmenu")
-            self:SetAttribute(prefix.."macrotext"..bid, nil)
-            self:SetAttribute(prefix.."spell"..bid, nil)
-          else
-            self:SetAttribute(prefix.."type"..bid, "spell")
-            self:SetAttribute(prefix.."spell"..bid, pfUI_config.unitframes["clickcast"..bconf..mconf])
-            self:SetAttribute(prefix.."macro"..bid, nil)
-          end
+      local action = pfUI_config.unitframes["clickcast"..bconf..mconf]
+      if action and action ~= "" then
+        local prefix = modifier ~= "" and (modifier .. "-") or ""
+        local low = action:lower()
+        if low == "menu" then
+          self:SetAttribute(prefix .. "type" .. bid, "menu")
+        elseif low == "target" then
+          self:SetAttribute(prefix .. "type" .. bid, "target")
+        elseif low == "focus" then
+          self:SetAttribute(prefix .. "type" .. bid, "focus")
+        elseif low:find("^macro:") then
+          self:SetAttribute(prefix .. "type" .. bid, "macro")
+          self:SetAttribute(prefix .. "macro" .. bid, action:sub(7):gsub("^%s+", ""))
+        elseif action:find("^/") then
+          self:SetAttribute(prefix .. "type" .. bid, "macro")
+          self:SetAttribute(prefix .. "macrotext" .. bid, action)
         else
-          -- fill clickaction table for vanillla
-          self.clickactions = self.clickactions or {}
-          self.clickactions[modifier..button] = pfUI_config.unitframes["clickcast"..bconf..mconf]
+          self:SetAttribute(prefix .. "type" .. bid, "spell")
+          self:SetAttribute(prefix .. "spell" .. bid, action)
         end
       end
     end
   end
 end
 
-function pfUI.uf:ClickAction(button)
-  local label = this.label or ""
-  local id = this.id or ""
-  local unitstr = label .. id
-  local showmenu = button == "RightButton" and true or nil
-  if SpellIsTargeting() and button == "RightButton" then
-    SpellStopTargeting()
-    return
-  end
-
-  if SpellIsTargeting() and button == "LeftButton" then
-    SpellTargetUnit(unitstr)
-  elseif CursorHasItem() then
-    DropItemOnUnit(unitstr)
-  end
-
-  -- run click casting if enabled
-  local modstring = ""
-  modstring = IsAltKeyDown() and modstring.."alt" or modstring
-  modstring = IsControlKeyDown() and modstring.."ctrl" or modstring
-  modstring = IsShiftKeyDown() and modstring.."shift" or modstring
-  modstring = modstring..button
-  if this.clickactions and this.clickactions[modstring] then
-    local action_lower = string.lower(this.clickactions[modstring])
-    if string.find(action_lower, "^menu") then
-      -- show menu
-      showmenu = true
-    elseif string.find(action_lower, "^target") then
-      -- target unit
-      showmenu = nil
-    else
-      -- run click cast action
-      local is_macro = string.find(this.clickactions[modstring], "^%/(.+)")
-
-      local tswitch = UnitIsUnit(unitstr, "target")
-      TargetUnit(unitstr)
-
-      if is_macro then
-        RunMacroText(this.clickactions[modstring])
-      else
-        CastSpellByName(this.clickactions[modstring])
-      end
-
-      if not tswitch then TargetLastTarget() end
-
-      return
-    end
-  end
-
-  -- dropdown menus
-  if showmenu then
-    pfUI.uf:RightClickAction(label)
-    return
-  end
-
-  -- drop food on petframe
-  if label == "pet" and CursorHasItem() then
-    local _, playerClass = UnitClass("player")
-    if playerClass == "HUNTER" then
-      DropItemOnUnit("pet")
-      return
-    end
-  end
-
-  -- default click
-  TargetUnit(unitstr)
-end
-
 function pfUI.uf:AddIcon(frame, pos, icon, timeleft, stacks, start, duration)
-  local showtime = frame.config.indicator_time == "1" and true or nil
   local showstacks = frame.config.indicator_stacks == "1" and true or nil
   local position = frame.config.indicator_pos or "TOPLEFT"
   local iconsize = tonumber(frame.config.indicator_size)
@@ -3077,7 +2400,7 @@ function pfUI.uf:AddIcon(frame, pos, icon, timeleft, stacks, start, duration)
   if not frame.icon[pos] then
     frame.icon[pos] = CreateFrame("Frame", nil, frame.icon)
     frame.icon[pos]:SetParent(frame)
-    frame.icon[pos].tex = frame.icon[pos]:CreateTexture("OVERLAY")
+    frame.icon[pos].tex = frame.icon[pos]:CreateTexture(nil, "OVERLAY")
     frame.icon[pos].tex:SetAllPoints(frame.icon[pos])
     frame.icon[pos].tex:SetTexCoord(.08, .92, .08, .92)
     frame.icon[pos].stacks = frame.icon[pos]:CreateFontString(nil, "OVERLAY")
@@ -3085,26 +2408,13 @@ function pfUI.uf:AddIcon(frame, pos, icon, timeleft, stacks, start, duration)
     frame.icon[pos].stacks:SetJustifyH("RIGHT")
     frame.icon[pos].stacks:SetJustifyV("BOTTOM")
 
-    -- Check if parent frame has cooldown animation enabled
-    local parent_cooldown_anim = frame.config and tonumber(frame.config.cooldown_anim) or 1
-    if parent_cooldown_anim == 1 then
-      frame.icon[pos].cd = CreateFrame(COOLDOWN_FRAME_TYPE, nil, frame.icon[pos])
-    else
-      frame.icon[pos].cd = CreateFrame("Frame", nil, frame.icon[pos])
-      frame.icon[pos].cd.AdvanceTime = DoNothing
-      frame.icon[pos].cd.SetSequence = DoNothing
-      frame.icon[pos].cd.SetSequenceTime = DoNothing
-    end
-    
-    frame.icon[pos].cd.pfCooldownStyleAnimation = 0
-    frame.icon[pos].cd.pfCooldownType = "ALL"
+    frame.icon[pos].cd = CreateCooldown(frame.icon[pos], "indicator")
     frame.icon[pos].cd:SetFrameLevel(48)
   end
 
   -- update icon configuration
   if frame.icon[pos].iconsize ~= iconsize or frame.icon[pos].spacing ~= spacing then
-    frame.icon[pos]:SetWidth(iconsize)
-    frame.icon[pos]:SetHeight(iconsize)
+    frame.icon[pos]:SetSize(iconsize, iconsize)
     frame.icon[pos]:SetPoint("TOPLEFT", frame.icon, "TOPLEFT", (pos-1)*(iconsize + spacing), 0)
     frame.icon[pos].stacks:SetFont(pfUI.font_unit, math.max(iconsize/3, 10), "OUTLINE")
     frame.icon[pos].iconsize = iconsize
@@ -3117,11 +2427,12 @@ function pfUI.uf:AddIcon(frame, pos, icon, timeleft, stacks, start, duration)
     frame.icon[pos].icon = icon
   end
 
-  -- show remaining time if config is set
-  if showtime and start and duration and timeleft < 100 and iconsize > 9 then
+  -- start the timer from the aura's duration, or from its time left alone
+  -- when a prediction has no duration; icons this small have no room for it
+  if iconsize > 9 and duration and duration > 0 then
     CooldownFrame_SetTimer(frame.icon[pos].cd, start, duration, 1)
-  elseif showtime and timeleft and timeleft < 100 and iconsize > 9 then
-    CooldownFrame_SetTimer(frame.icon[pos].cd, GetTime(), timeleft, 1)
+  elseif iconsize > 9 and timeleft and timeleft > 0 then
+    SetCooldownTimeLeft(frame.icon[pos].cd, timeleft)
   else
     CooldownFrame_SetTimer(frame.icon[pos].cd, GetTime(), 0, 1)
   end
@@ -3160,7 +2471,7 @@ function pfUI.uf:HideIcon(frame, pos)
 end
 
 function pfUI.uf:SetupDebuffFilter(allclasses)
-  local _, myclass = UnitClass("player")
+  local myclass = UnitClassBase("player")
   local debuffs = {}
 
   if myclass == "PALADIN" or myclass == "PRIEST" or myclass == "WARLOCK" or allclasses then
@@ -3183,180 +2494,127 @@ function pfUI.uf:SetupDebuffFilter(allclasses)
 end
 
 function pfUI.uf:SetupBuffIndicators(config)
-  local _, myclass = UnitClass("player")
+  local myclass = UnitClassBase("player")
   local indicators = {}
 
   if config.show_buffs == "1" then -- buffs
     if myclass == "DRUID" then
-      -- Mark of the Wild
-      table.insert(indicators, "interface\\icons\\spell_nature_regeneration")
-      -- Gift of the Wild
-      table.insert(indicators, "interface\\icons\\spell_nature_giftofthewild")
-      -- Thorns
-      table.insert(indicators, "interface\\icons\\spell_nature_thorns")
+      AddIndicator(indicators, 1126)   -- Mark of the Wild
+      AddIndicator(indicators, 21849)  -- Gift of the Wild
+      AddIndicator(indicators, 467)    -- Thorns
     end
 
     if myclass == "PRIEST" then
-      -- Prayer Of Fortitude"
-      table.insert(indicators, "interface\\icons\\spell_holy_wordfortitude")
-      table.insert(indicators, "interface\\icons\\spell_holy_prayeroffortitude")
-      -- Prayer of Spirit
-      table.insert(indicators, "interface\\icons\\spell_holy_divinespirit")
-      table.insert(indicators, "interface\\icons\\spell_holy_prayerofspirit")
-      -- Shadow Protection
-      table.insert(indicators, "interface\\icons\\spell_shadow_antishadow")
-      table.insert(indicators, "interface\\icons\\spell_holy_prayerofshadowprotection")
-      -- Fear Ward
-      table.insert(indicators, "interface\\icons\\spell_holy_excorcism")
+      AddIndicator(indicators, 1243)   -- Power Word: Fortitude
+      AddIndicator(indicators, 21562)  -- Prayer of Fortitude
+      AddIndicator(indicators, 6386)   -- Divine Spirit
+      AddIndicator(indicators, 27681)  -- Prayer of Spirit
+      AddIndicator(indicators, 976)    -- Shadow Protection
+      AddIndicator(indicators, 27683)  -- Prayer of Shadow Protection
+      AddIndicator(indicators, 6346)   -- Fear Ward
     end
 
     if myclass == "PALADIN" then
-      -- Blessing of Salvation
-      table.insert(indicators, "interface\\icons\\spell_holy_greaterblessingofsalvation")
-      table.insert(indicators, "interface\\icons\\spell_holy_sealofsalvation")
-      -- Blessing of Wisdom
-      table.insert(indicators, "interface\\icons\\spell_holy_sealofwisdom")
-      table.insert(indicators, "interface\\icons\\spell_holy_greaterblessingofwisdom")
-      -- Blessing of Sanctuary
-      table.insert(indicators, "interface\\icons\\spell_nature_lightningshield")
-      table.insert(indicators, "interface\\icons\\spell_holy_greaterblessingofsanctuary")
-      -- Blessing of Kings
-      table.insert(indicators, "interface\\icons\\spell_magic_magearmor")
-      table.insert(indicators, "interface\\icons\\spell_magic_greaterblessingofkings")
-      -- Blessing of Might
-      table.insert(indicators, "interface\\icons\\spell_holy_fistofjustice")
-      table.insert(indicators, "interface\\icons\\spell_holy_greaterblessingofkings")
-      -- Blessing of Light
-      table.insert(indicators, "interface\\icons\\spell_holy_prayerofhealing02")
-      table.insert(indicators, "interface\\icons\\spell_holy_greaterblessingoflight")
-      -- Blessing of Sacrifice
-      table.insert(indicators, "interface\\icons\\spell_holy_sealofsacrifice")
-      -- Blessing of Freedom
-      table.insert(indicators, "interface\\icons\\spell_holy_sealofvalor")
-      -- Blessing of Protection
-      table.insert(indicators, "interface\\icons\\spell_holy_sealofprotection")
+      AddIndicator(indicators, 1038)   -- Blessing of Salvation
+      AddIndicator(indicators, 25895)  -- Greater Blessing of Salvation
+      AddIndicator(indicators, 19742)  -- Blessing of Wisdom
+      AddIndicator(indicators, 25894)  -- Greater Blessing of Wisdom
+      AddIndicator(indicators, 20204)  -- Blessing of Sanctuary
+      AddIndicator(indicators, 25899)  -- Greater Blessing of Sanctuary
+      AddIndicator(indicators, 20217)  -- Blessing of Kings
+      AddIndicator(indicators, 25898)  -- Greater Blessing of Kings
+      AddIndicator(indicators, 19740)  -- Blessing of Might
+      AddIndicator(indicators, 25782)  -- Greater Blessing of Might
+      AddIndicator(indicators, 19977)  -- Blessing of Light
+      AddIndicator(indicators, 25890)  -- Greater Blessing of Light
+      AddIndicator(indicators, 6940)   -- Hand of Sacrifice
+      AddIndicator(indicators, 45801)  -- Greater Blessing of Sacrifice
+      AddIndicator(indicators, 1044)   -- Hand of Freedom
+      AddIndicator(indicators, 1022)   -- Hand of Protection
     end
 
     if myclass == "WARLOCK" then
-      -- Fire Shield
-      table.insert(indicators, "interface\\icons\\spell_fire_firearmor")
-      -- Blood Pact
-      table.insert(indicators, "interface\\icons\\spell_shadow_bloodboil")
-      -- Soulstone
-      table.insert(indicators, "interface\\icons\\spell_shadow_soulgem")
-      -- Unending Breath
-      table.insert(indicators, "interface\\icons\\spell_shadow_demonbreath")
-      -- Detect Greater Invisibility or Detect Invisibility
-      table.insert(indicators, "interface\\icons\\spell_shadow_detectinvisibility")
-      -- Detect Lesser Invisibility
-      table.insert(indicators, "interface\\icons\\spell_shadow_detectlesserinvisibility")
-      -- Paranoia
-      table.insert(indicators, "interface\\icons\\Spell_Shadow_AuraOfDarkness")
+      AddIndicator(indicators, 1167)   -- Fire Shield
+      AddIndicator(indicators, 6307)   -- Blood Pact
+      AddIndicator(indicators, 20707)  -- Soulstone Resurrection
+      AddIndicator(indicators, 5697)   -- Unending Breath
+      AddIndicator(indicators, 2970)   -- Detect Invisibility
+      AddIndicator(indicators, 11743)  -- Detect Greater Invisibility
+      AddIndicator(indicators, 132)    -- Detect Lesser Invisibility
+      AddIndicator(indicators, 19480)  -- Paranoia
     end
 
     if myclass == "WARRIOR" then
-      -- Battle Shout
-      table.insert(indicators, "interface\\icons\\ability_warrior_battleshout")
-      -- Commanding Shout (TBC)
-      table.insert(indicators, "interface\\icons\\ability_warrior_rallyingcry")
+      AddIndicator(indicators, 5242)   -- Battle Shout
+      AddIndicator(indicators, 45580)  -- Commanding Shout
     end
 
     if myclass == "MAGE" then
-      -- Arcane Intellect
-      table.insert(indicators, "interface\\icons\\spell_holy_magicalsentry")
-      table.insert(indicators, "interface\\icons\\spell_holy_arcaneintellect")
-      -- Dampen Magic
-      table.insert(indicators, "interface\\icons\\spell_nature_abolishmagic")
-      -- Amplify Magic
-      table.insert(indicators, "interface\\icons\\spell_holy_flashheal")
+      AddIndicator(indicators, 1459)   -- Arcane Intellect
+      AddIndicator(indicators, 23028)  -- Arcane Brilliance
+      AddIndicator(indicators, 604)    -- Dampen Magic
+      AddIndicator(indicators, 1008)   -- Amplify Magic
     end
 
     if myclass == "HUNTER" then
-      -- Aspect of the Wild
-      table.insert(indicators, "interface\\icons\\spell_nature_protectionformnature")
-
-      -- Aspect of the Pack
-      table.insert(indicators, "interface\\icons\\ability_mount_whitetiger")
-
-      -- Misdirection (TBC)
-      table.insert(indicators, "interface\\icons\\ability_hunter_misdirection")
+      AddIndicator(indicators, 20043)  -- Aspect of the Wild
+      AddIndicator(indicators, 13159)  -- Aspect of the Pack
     end
 
     if myclass == "SHAMAN" then
-      -- Earth Shield (TBC)
-      table.insert(indicators, "interface\\icons\\spell_nature_skinofearth")
+      AddIndicator(indicators, 45525)  -- Earth Shield
     end
   end
 
   if config.show_procs == "1" then -- procs
     if myclass == "SHAMAN" or config.all_procs == "1" then
-      -- Ancestral Fortitude
-      table.insert(indicators, "interface\\icons\\spell_nature_undyingstrength")
-      -- Healing Way
-      table.insert(indicators, "interface\\icons\\spell_nature_healingway")
-      -- Totemic Power (known issue: one conflicts with Blessed Sunfruit buff)
-      table.insert(indicators, "interface\\icons\\spell_holy_spiritualguidence")
-      table.insert(indicators, "interface\\icons\\spell_holy_devotion")
-      table.insert(indicators, "interface\\icons\\spell_holy_holynova")
-      table.insert(indicators, "interface\\icons\\spell_magic_magearmor")
+      AddIndicator(indicators, 16177)  -- Ancestral Fortitude
+      AddIndicator(indicators, 29202)  -- Healing Way
+      -- Totemic Power is four auras, one per totem school, each with its own icon
+      AddIndicator(indicators, 28824)
+      AddIndicator(indicators, 28825)
+      AddIndicator(indicators, 28826)
+      AddIndicator(indicators, 28827)
     end
 
     if myclass == "PRIEST" or config.all_procs == "1" then
-      -- Inspiration
-      table.insert(indicators, "interface\\icons\\inv_shield_06")
+      AddIndicator(indicators, 14893)  -- Inspiration
     end
   end
 
   if config.show_hots == "1" then -- hots
     if myclass == "PRIEST" or config.all_hots == "1" then
-      -- Renew
-      table.insert(indicators, "interface\\icons\\spell_holy_renew")
-      -- Power Word: Shield
-      table.insert(indicators, "interface\\icons\\spell_holy_powerwordshield")
-      -- Prayer of Mending (TBC)
-      table.insert(indicators, "interface\\icons\\spell_holy_prayerofmendingtga")
+      AddIndicator(indicators, 139, "Renew")   -- Renew
+      AddIndicator(indicators, 17)             -- Power Word: Shield
     end
 
     if myclass == "DRUID" or config.all_hots == "1" then
-      -- Regrowth
-      table.insert(indicators, "interface\\icons\\spell_nature_resistnature")
-      -- Rejuvenation
-      table.insert(indicators, "interface\\icons\\spell_nature_rejuvenation")
-      -- Lifebloom
-      table.insert(indicators, "interface\\icons\\inv_misc_herb_felblossom")
+      AddIndicator(indicators, 8936, "Regr")   -- Regrowth
+      AddIndicator(indicators, 774, "Reju")    -- Rejuvenation
     end
   end
 
   if config.show_totems == "1" and myclass == "SHAMAN" then -- totems
-    -- Strength of Earth Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_earthbindtotem")
-    -- Stoneskin Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_stoneskintotem")
-    -- Mana Spring Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_manaregentotem")
-    -- Mana Tide Totem
-    table.insert(indicators, "interface\\icons\\spell_frost_summonwaterelemental")
-    -- Healing Spring Totem
-    table.insert(indicators, "interface\\icons\\inv_spear_04")
-    -- Tranquil Air Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_brilliance")
-    -- Grace of Air Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_invisibilitytotem")
-    -- Grounding Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_groundingtotem")
-    -- Nature Resistance Totem
-    table.insert(indicators, "interface\\icons\\spell_nature_natureresistancetotem")
-    -- Fire Resistance Totem
-    table.insert(indicators, "interface\\icons\\spell_fireresistancetotem_01")
-    -- Frost Resistance Totem
-    table.insert(indicators, "interface\\icons\\spell_frostresistancetotem_01")
+    -- the aura each totem applies, not the cast that drops it: they share an
+    -- icon but the totem's own name carries a " Totem" suffix the aura lacks
+    AddIndicator(indicators, 8076)   -- Strength of Earth
+    AddIndicator(indicators, 8072)   -- Stoneskin
+    AddIndicator(indicators, 5677)   -- Mana Spring
+    AddIndicator(indicators, 16191)  -- Mana Tide
+    AddIndicator(indicators, 5672)   -- Healing Stream
+    AddIndicator(indicators, 25909)  -- Tranquil Air
+    AddIndicator(indicators, 8836)   -- Grace of Air
+    AddIndicator(indicators, 8177)   -- Grounding Totem
+    AddIndicator(indicators, 10596)  -- Nature Resistance
+    AddIndicator(indicators, 8185)   -- Fire Resistance
+    AddIndicator(indicators, 8182)   -- Frost Resistance
   end
 
   return indicators
 end
 
 local function abbrevname(t)
-  return string.sub(t,1,1)..". "
+  return t:sub(1,1)..". "
 end
 
 function pfUI.uf:GetNameString(unitstr)
@@ -3366,12 +2624,12 @@ function pfUI.uf:GetNameString(unitstr)
 
   -- first try to only abbreviate the first word
   if abbrev and name and strlen(name) > size then
-    name = string.gsub(name, "^(%S+) ", abbrevname)
+    name = name:gsub("^(%S+) ", abbrevname)
   end
 
   -- abbreviate all if it still doesn't fit
   if abbrev and name and strlen(name) > size then
-    name = string.gsub(name, "(%S+) ", abbrevname)
+    name = name:gsub("(%S+) ", abbrevname)
   end
 
   return name
@@ -3407,14 +2665,12 @@ function pfUI.uf:GetStatusValue(unit, pos)
   end
 
   -- Get stats with Nampower Integration
-  local hp, hpmax, mp, mpmax, powerType = pfUI.api.GetUnitStats(unitstr, true)
+  local hp, hpmax, mp, mpmax, powerType = pfUI.api.GetUnitStats(unitstr)
   local rhp, rhpmax = hp, hpmax
 
   -- Use libhealth for mob health estimation (overrides Nampower/Standard)
   if pfUI.libhealth and pfUI.libhealth.enabled then
     rhp, rhpmax = pfUI.libhealth:GetUnitHealth(unitstr)
-  elseif unit.label == "target" and (MobHealth3 or MobHealthFrame) and MobHealth_GetTargetCurHP() then
-    rhp, rhpmax = MobHealth_GetTargetCurHP(), MobHealth_GetTargetMaxHP()
   end
 
   if config == "unit" then
@@ -3430,8 +2686,7 @@ function pfUI.uf:GetStatusValue(unit, pos)
   elseif config == "name" then
     return unit:GetColor("unit") .. pfUI.uf:GetNameString(unitstr)
   elseif config == "nameshort" then
-    local length = tonumber(unit.config.txthpshortnamelen)
-    return unit:GetColor("unit") .. strsub(UnitName(unitstr), 0, length)
+    return unit:GetColor("unit") .. strsub(UnitName(unitstr), 0, 3)
   elseif config == "level" then
     return unit:GetColor("level") .. pfUI.uf:GetLevelString(unitstr)
   elseif config == "class" then
@@ -3440,6 +2695,19 @@ function pfUI.uf:GetStatusValue(unit, pos)
     else
       return ""
     end
+  elseif config == "ownername" then
+    local owner
+    if unit.label == "raidpet" then owner = "raid" .. unit.id
+    elseif unit.label == "partypet" then owner = "party" .. unit.id
+    elseif unit.label == "pet" then owner = "player" end
+    if not (owner and UnitExists(owner)) then return "" end
+    local color = ""
+    if unit.config["classcolor"] == "1" and UnitIsPlayer(owner) then
+      local _, r, g, b = GetUnitColor(owner)
+      if C.unitframes.pastel == "1" then r, g, b = (r+.75)*.5, (g+.75)*.5, (b+.75)*.5 end
+      color = rgbhex(r, g, b)
+    end
+    return color .. pfUI.uf:GetNameString(owner)
 
   -- health
   elseif config == "health" then
@@ -3447,7 +2715,7 @@ function pfUI.uf:GetStatusValue(unit, pos)
   elseif config == "healthmax" then
     return unit:GetColor("health") .. pfUI.api.Abbreviate(rhpmax)
   elseif config == "healthperc" then
-    return unit:GetColor("health") .. ceil(hp / hpmax * 100)
+    return unit:GetColor("health") .. ceil(hp / hpmax * 100) .. "%"
   elseif config == "healthmiss" then
     local health = ceil(rhp - rhpmax)
     if UnitIsDead(unitstr) then
@@ -3499,8 +2767,8 @@ function pfUI.uf:GetStatusValue(unit, pos)
   elseif config == "powermax" then
     return unit:GetColor("power") .. pfUI.api.Abbreviate(mpmax)
   elseif config == "powerperc" then
-    local perc = UnitManaMax(unitstr) > 0 and ceil(mp / mpmax * 100) or 0
-    return unit:GetColor("power") .. perc
+    local perc = UnitPowerMax(unitstr) > 0 and ceil(mp / mpmax * 100) or 0
+    return unit:GetColor("power") .. perc .. "%"
   elseif config == "powermiss" then
     local power = ceil(mp - mpmax)
     if power == 0 then
@@ -3510,7 +2778,7 @@ function pfUI.uf:GetStatusValue(unit, pos)
     end
   elseif config == "powerdyn" then
     -- show percentage when only mana is less than 100%
-    if mp ~= mpmax and UnitPowerType(unitstr) == 0 then
+    if mp ~= mpmax and UnitPowerType(unitstr) == Enum.PowerType.Mana then
       return unit:GetColor("power") .. pfUI.api.Abbreviate(mp) .. " - " .. ceil(mp / mpmax * 100) .. "%"
     else
       return unit:GetColor("power") .. pfUI.api.Abbreviate(mp)
@@ -3530,10 +2798,7 @@ function pfUI.uf.GetColor(self, preset)
 
   if preset == "unit" and config["classcolor"] == "1" then
     if UnitIsPlayer(unitstr) then
-      local _, class = UnitClass(unitstr)
-      if RAID_CLASS_COLORS[class] then
-        r, g, b = RAID_CLASS_COLORS[class].r, RAID_CLASS_COLORS[class].g, RAID_CLASS_COLORS[class].b
-      end
+      _, r, g, b = GetUnitColor(unitstr)
     elseif self.label == "pet" then
       local happiness = GetPetHappiness()
       if happiness == 1 then
@@ -3549,30 +2814,14 @@ function pfUI.uf.GetColor(self, preset)
     end
 
   elseif preset == "class" and config["classcolor"] == "1" then
-    local _, class = UnitClass(unitstr)
-    if RAID_CLASS_COLORS[class] then
-      r, g, b = RAID_CLASS_COLORS[class].r, RAID_CLASS_COLORS[class].g, RAID_CLASS_COLORS[class].b
-    end
+    _, r, g, b = GetUnitColor(unitstr)
 
   elseif preset == "reaction" and config["classcolor"] == "1" then
-    r = UnitReactionColor[UnitReaction(unitstr, "player")].r
-    g = UnitReactionColor[UnitReaction(unitstr, "player")].g
-    b = UnitReactionColor[UnitReaction(unitstr, "player")].b
+    local color = UnitReactionColor[UnitReaction(unitstr, "player")]
+    r, g, b = color.r, color.g, color.b
 
   elseif preset == "health" and config["healthcolor"] == "1" then
-    -- O(1) Nampower lookup for health gradient color
-    local hp, hpmax
-    if GetUnitField then
-      local guid = GetUnitGUID(unitstr)
-      if guid then
-        hp = GetUnitField(guid, "health")
-        hpmax = GetUnitField(guid, "maxHealth")
-      end
-    end
-    -- Fallback to standard API
-    if not hp or not hpmax then
-      hp, hpmax = UnitHealth(unitstr), UnitHealthMax(unitstr)
-    end
+    local hp, hpmax = UnitHealth(unitstr), UnitHealthMax(unitstr)
     if hpmax and hpmax > 0 then
       r, g, b = GetColorGradient(hp / hpmax)
     else
@@ -3580,13 +2829,11 @@ function pfUI.uf.GetColor(self, preset)
     end
 
   elseif preset == "power" and config["powercolor"] == "1" then
-    r = ManaBarColor[UnitPowerType(unitstr)].r
-    g = ManaBarColor[UnitPowerType(unitstr)].g
-    b = ManaBarColor[UnitPowerType(unitstr)].b
+    local color = ManaBarColor[UnitPowerType(unitstr)]
+    r, g, b = color.r, color.g, color.b
   elseif preset == "level" and config["levelcolor"] == "1" then
-    r = GetDifficultyColor(UnitLevel(unitstr)).r
-    g = GetDifficultyColor(UnitLevel(unitstr)).g
-    b = GetDifficultyColor(UnitLevel(unitstr)).b
+    local color = GetDifficultyColor(UnitLevel(unitstr))
+    r, g, b = color.r, color.g, color.b
   end
 
   if C.unitframes.pastel == "1" then
@@ -3596,61 +2843,3 @@ function pfUI.uf.GetColor(self, preset)
   return rgbhex(r,g,b)
 end
 
--- ============================================================================
--- Slash Commands for Stats Frame
--- ============================================================================
-_G.SLASH_PFUISTATS1 = "/pfuistats"
-_G.SLASH_PFUISTATS2 = "/ufstats"
-_G.SlashCmdList["PFUISTATS"] = function(msg)
-  msg = string.lower(msg or "")
-  
-  if not pfUI.uf.stats then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ERROR:|r Stats not initialized!")
-    return
-  end
-  
-  -- Initialize startTime on first use
-  if pfUI.uf.stats.startTime == 0 then
-    pfUI.uf.stats.startTime = GetTime()
-  end
-  
-  if msg == "reset" then
-    pfUI.uf.stats.eventUpdates = 0
-    pfUI.uf.stats.heartbeatUpdates = 0
-    pfUI.uf.stats.earlyReturns = 0
-    pfUI.uf.stats.nampowerUsed = 0
-    pfUI.uf.stats.fallbackUsed = 0
-    pfUI.uf.stats.throttledSkips = 0
-    pfUI.uf.stats.startTime = GetTime()
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00pfUI Stats:|r Reset!")
-    
-  elseif msg == "toggle" then
-    pfUI.uf.stats.enabled = not pfUI.uf.stats.enabled
-    local status = pfUI.uf.stats.enabled and "|cff00ff00ON|r" or "|cffff0000OFF|r"
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00pfUI Stats:|r Tracking: " .. status)
-    
-  elseif msg == "show" then
-    if pfUI.uf.statsFrame then
-      pfUI.uf.statsFrame:Show()
-      DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00pfUI Stats:|r Frame shown")
-    end
-    
-  elseif msg == "hide" then
-    if pfUI.uf.statsFrame then
-      pfUI.uf.statsFrame:Hide()
-      DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00pfUI Stats:|r Frame hidden")
-    end
-    
-  else
-    -- Toggle frame (default action)
-    if pfUI.uf.statsFrame then
-      if pfUI.uf.statsFrame:IsShown() then
-        pfUI.uf.statsFrame:Hide()
-        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00pfUI Stats:|r Frame hidden")
-      else
-        pfUI.uf.statsFrame:Show()
-        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00pfUI Stats:|r Frame shown")
-      end
-    end
-  end
-end

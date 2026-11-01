@@ -1,19 +1,17 @@
-pfUI:RegisterModule("chat", "vanilla:tbc", function ()
+pfUI:RegisterModule("chat", function ()
   local panelfont = C.panel.use_unitfonts == "1" and pfUI.font_unit or pfUI.font_default
   local panelfont_size = C.panel.use_unitfonts == "1" and C.global.font_unit_size or C.global.font_size
   local rawborder, default_border = GetBorderSize("chat")
 
-  if pfUI.client <= 11200 then
-    -- The 'GetChatWindowInfo' function returns shown as 'false' while the UIParent is hidden (Alt+Z).
-    -- Based on that return value, the 'FloatingChatFrame_Update' would remove every chat frame,
-    -- that isn't tabbed while the interface is hidden. With this hook we prevent the original
-    -- 'FloatingChatFrame_Update' function from being called during that time.
+  -- The 'GetChatWindowInfo' function returns shown as 'false' while the UIParent is hidden (Alt+Z).
+  -- Based on that return value, the 'FloatingChatFrame_Update' would remove every chat frame,
+  -- that isn't tabbed while the interface is hidden. With this hook we prevent the original
+  -- 'FloatingChatFrame_Update' function from being called during that time.
 
-    local HookFloatingChatFrame_Update = _G.FloatingChatFrame_Update
-    _G.FloatingChatFrame_Update = function(id, onUpdateEvent)
-      if not UIParent:IsShown() then return end
-      HookFloatingChatFrame_Update(id, onUpdateEvent)
-    end
+  local HookFloatingChatFrame_Update = _G.FloatingChatFrame_Update
+  _G.FloatingChatFrame_Update = function(id, onUpdateEvent)
+    if not UIParent:IsShown() then return end
+    HookFloatingChatFrame_Update(id, onUpdateEvent)
   end
 
   _G.CHAT_FONT_HEIGHTS = { 8, 10, 12, 14, 16, 18, 20 }
@@ -65,6 +63,23 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     return pfUI_cache["chathistory"][realm][player][id]
   end
 
+  -- [ Chat Panel Colors ]
+  -- The panels normally inherit pfUI's global appearance theme; custom colors let chat
+  -- deviate from it. CreateBackdrop is re-run first to restore the theme, so toggling
+  -- custom colors back off doesn't leave the previous override behind.
+  local function ApplyPanelColors(panel)
+    if not panel then return end
+
+    CreateBackdrop(panel, default_border, nil, .8)
+    if C.chat.global.custombg ~= "1" then return end
+
+    local r, g, b, a = GetStringColor(C.chat.global.background)
+    panel.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
+
+    local r, g, b, a = GetStringColor(C.chat.global.border)
+    panel.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
+  end
+
   pfUI.chat = CreateFrame("Frame",nil,UIParent)
 
   pfUI.chat.left = CreateFrame("Frame", "pfChatLeft", UIParent)
@@ -78,17 +93,9 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
   pfUI.chat.left:SetPoint("BOTTOMLEFT", 2*default_border,2*default_border)
   pfUI.chat.left:SetScript("OnShow", function() pfUI.chat:RefreshChat() end)
   UpdateMovable(pfUI.chat.left)
-  CreateBackdrop(pfUI.chat.left, default_border, nil, .8)
+  ApplyPanelColors(pfUI.chat.left)
   if C.chat.global.frameshadow == "1" then
     CreateBackdropShadow(pfUI.chat.left)
-  end
-
-  if C.chat.global.custombg == "1" then
-    local r, g, b, a = strsplit(",", C.chat.global.background)
-    pfUI.chat.left.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
-
-    local r, g, b, a = strsplit(",", C.chat.global.border)
-    pfUI.chat.left.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
   end
 
   pfUI.chat.left.panelTop = CreateFrame("Frame", "leftChatPanelTop", pfUI.chat.left)
@@ -138,7 +145,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     ["URL"] = function(a1,a2,a3) return pfUI.chat:FormatLink(pfUI.chat.URLPattern.URL.fm,a1,a2,a3) end,
   }
 
-  -- url copy dialog
+  -- url links
   function pfUI.chat:FormatLink(formatter,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10)
     if not (formatter and a1) then return end
     local newtext = string.format(formatter,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10)
@@ -178,73 +185,10 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     return text
   end
 
-  pfUI.chat.urlcopy = CreateFrame("Frame", "pfURLCopy", UIParent)
-  pfUI.chat.urlcopy:Hide()
-  pfUI.chat.urlcopy:SetWidth(270)
-  pfUI.chat.urlcopy:SetHeight(65)
-  pfUI.chat.urlcopy:SetFrameStrata("FULLSCREEN")
-  pfUI.chat.urlcopy:SetPoint("CENTER", 0, 0)
-  CreateBackdrop(pfUI.chat.urlcopy, nil, nil, 0.8)
-
-  pfUI.chat.urlcopy:SetMovable(true)
-  pfUI.chat.urlcopy:EnableMouse(true)
-  pfUI.chat.urlcopy:RegisterForDrag("LeftButton")
-  pfUI.chat.urlcopy:SetScript("OnDragStart",function()
-    this:StartMoving()
+  -- clicking a url link copies it
+  LinkUtil.RegisterLinkHandler("url", function(link, text, linkData)
+    CopyText(linkData.options)
   end)
-
-  pfUI.chat.urlcopy:SetScript("OnDragStop",function()
-    this:StopMovingOrSizing()
-  end)
-
-  pfUI.chat.urlcopy:SetScript("OnShow", function()
-    this.text:HighlightText()
-  end)
-
-  pfUI.chat.urlcopy.text = CreateFrame("EditBox", "pfURLCopyEditBox", pfUI.chat.urlcopy)
-  pfUI.chat.urlcopy.text:SetTextColor(.2,1,.8,1)
-  pfUI.chat.urlcopy.text:SetJustifyH("CENTER")
-
-  pfUI.chat.urlcopy.text:SetWidth(250)
-  pfUI.chat.urlcopy.text:SetHeight(20)
-  pfUI.chat.urlcopy.text:SetPoint("TOP", pfUI.chat.urlcopy, "TOP", 0, -10)
-  pfUI.chat.urlcopy.text:SetFontObject(GameFontNormal)
-  CreateBackdrop(pfUI.chat.urlcopy.text)
-
-  pfUI.chat.urlcopy.text:SetScript("OnEscapePressed", function(self)
-    pfUI.chat.urlcopy:Hide()
-  end)
-
-  pfUI.chat.urlcopy.text:SetScript("OnEditFocusLost", function(self)
-    pfUI.chat.urlcopy:Hide()
-  end)
-
-  pfUI.chat.urlcopy.close = CreateFrame("Button", "pfURLCopyClose", pfUI.chat.urlcopy, "UIPanelButtonTemplate")
-  pfUI.api.SkinButton(pfUI.chat.urlcopy.close)
-  pfUI.chat.urlcopy.close:SetWidth(70)
-  pfUI.chat.urlcopy.close:SetHeight(18)
-  pfUI.chat.urlcopy.close:SetPoint("BOTTOMRIGHT", pfUI.chat.urlcopy, "BOTTOMRIGHT", -10, 10)
-
-  pfUI.chat.urlcopy.close:SetText(T["Close"])
-  pfUI.chat.urlcopy.close:SetScript("OnClick", function()
-    pfUI.chat.urlcopy:Hide()
-  end)
-
-  pfUI.chat.urlcopy.SetItemRef = SetItemRef
-  pfUI.chat.urlcopy.CopyText = function(text)
-    pfUI.chat.urlcopy.text:SetText(text)
-    pfUI.chat.urlcopy:Show()
-  end
-
-  function _G.SetItemRef(link, text, button)
-    if (strsub(link, 1, 3) == "url") then
-      if string.len(link) > 4 and string.sub(link,1,4) == "url:" then
-        pfUI.chat.urlcopy.CopyText(string.sub(link,5, string.len(link)))
-      end
-      return
-    end
-    pfUI.chat.urlcopy.SetItemRef(link, text, button)
-  end
 
   pfUI.chat.right = CreateFrame("Frame", "pfChatRight", UIParent)
   pfUI.chat.right:SetFrameStrata("BACKGROUND")
@@ -253,17 +197,9 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
   pfUI.chat.right:SetPoint("BOTTOMRIGHT", -2*default_border,2*default_border)
   pfUI.chat.right:SetScript("OnShow", function() pfUI.chat:RefreshChat() end)
   UpdateMovable(pfUI.chat.right)
-  CreateBackdrop(pfUI.chat.right, default_border, nil, .8)
+  ApplyPanelColors(pfUI.chat.right)
   if C.chat.global.frameshadow == "1" then
     CreateBackdropShadow(pfUI.chat.right)
-  end
-
-  if C.chat.global.custombg == "1" then
-    local r, g, b, a = strsplit(",", C.chat.global.background)
-    pfUI.chat.right.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
-
-    local r, g, b, a = strsplit(",", C.chat.global.border)
-    pfUI.chat.right.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
   end
 
   pfUI.chat.right.panelTop = CreateFrame("Frame", "rightChatPanelTop", pfUI.chat.right)
@@ -279,21 +215,75 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
   pfUI.chat:RegisterEvent("UI_SCALE_CHANGED")
 
   local function ChatOnMouseWheel()
-    if (arg1 > 0) then
-      if IsShiftKeyDown() then
-        this:ScrollToTop()
-      else
-        for i=1, C.chat.global.scrollspeed do
-          this:ScrollUp()
-        end
-      end
-    elseif (arg1 < 0) then
-      if IsShiftKeyDown() then
-        this:ScrollToBottom()
-      else
-        for i=1, C.chat.global.scrollspeed do
-          this:ScrollDown()
-        end
+    if not IsShiftKeyDown() then
+      this:ScrollByAmount(arg1 * C.chat.global.scrollspeed)
+    elseif arg1 > 0 then
+      -- stops with the oldest line on top, as the wheel does; ScrollToTop
+      -- would leave it alone on the bottom line
+      this:ScrollByAmount(this:GetMaxScrollRange())
+    else
+      this:ScrollToBottom()
+    end
+  end
+
+  -- [ Chat Background Alpha ]
+  -- Blizzard's per-window transparency slider drives FCF_SetWindowAlpha, which only
+  -- touches the ChatFrame*Background textures that pfUI hides on docked frames. Mirror
+  -- the window's stored alpha onto the visible pfUI backdrop so the native slider
+  -- controls it directly.
+  local function ApplyChatBackgroundAlpha(panel, frame)
+    if not (panel and panel.backdrop and frame) then return end
+    local _, _, _, _, _, alpha = GetChatWindowInfo(frame:GetID())
+    alpha = tonumber(alpha)
+    if not alpha then return end
+    local r, g, b = panel.backdrop:GetBackdropColor()
+    panel.backdrop:SetBackdropColor(r, g, b, alpha)
+  end
+
+  function pfUI.chat:RefreshBackgroundAlpha()
+    -- Custom colors own the alpha. C.chat.global.background carries its own alpha, is
+    -- set by profiles and is shared with the meter skins, so the native slider must not
+    -- overwrite it -- doing so reverted the configured opacity on every refresh. The
+    -- slider only drives the panel when the user hasn't opted into pfUI's chat colors.
+    if C.chat.global.custombg == "1" then return end
+
+    -- left panel follows the currently selected docked tab
+    local selected = SELECTED_CHAT_FRAME
+    if not (selected and selected:GetParent() == pfUI.chat.left) then
+      selected = ChatFrame1
+    end
+    ApplyChatBackgroundAlpha(pfUI.chat.left, selected)
+
+    if C.chat.right.enable == "1" then
+      ApplyChatBackgroundAlpha(pfUI.chat.right, ChatFrame3)
+    end
+  end
+
+  -- live config apply, resolved by the gui as U["chat"]. Lets the color pickers
+  -- take effect on the spot instead of waiting for a /reload.
+  function pfUI.chat:UpdateConfig()
+    ApplyPanelColors(pfUI.chat.left)
+    ApplyPanelColors(pfUI.chat.right)
+    pfUI.chat:RefreshBackgroundAlpha()
+  end
+
+  function pfUI.chat:MigrateBackgroundAlpha()
+    -- Runs once per character. The previous SetupPositions default stored a hard 0 window
+    -- alpha, which now renders the pfUI backdrop fully transparent. Restore the historical
+    -- 0.8 look for any pfUI-managed window still sitting at 0. Only existing installs that
+    -- already ran chat setup carry that legacy 0; fresh installs get 0.8 from SetupPositions.
+    if pfUI_init.chatbgalpha then return end
+    if not pfUI_init["chat_position"] then return end
+    pfUI_init.chatbgalpha = true
+
+    local frames = { ChatFrame1, ChatFrame2 }
+    if C.chat.right.enable == "1" then table.insert(frames, ChatFrame3) end
+
+    for _, frame in ipairs(frames) do
+      local _, _, _, _, _, alpha = GetChatWindowInfo(frame:GetID())
+      alpha = tonumber(alpha)
+      if alpha and alpha <= 0 then
+        FCF_SetWindowAlpha(frame, 0.8)
       end
     end
   end
@@ -315,7 +305,8 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     CreateBackdrop(LanguageMenu)
     CreateBackdrop(VoiceMacroMenu)
 
-    local combatlogpanel = (CombatLogQuickButtonFrame_Custom and CombatLogQuickButtonFrame_Custom:GetHeight() or 0)
+    -- the combatlog module's quick button bar sits above the docked log
+    local combatlogpanel = (ChatFrame2.CombatLogQuickButtonFrame and ChatFrame2.CombatLogQuickButtonFrame:GetHeight() or 0)
 
     for i=1, NUM_CHAT_WINDOWS do
       local frame = _G["ChatFrame"..i]
@@ -328,7 +319,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
         end
       end
 
-      if combat > 5 then
+      if frame.CombatLogQuickButtonFrame or combat > 5 then
         frame.pfCombatLog = true
       else
         frame.pfCombatLog = nil
@@ -395,7 +386,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
 
       -- hide textures
       for j,v in ipairs({tab:GetRegions()}) do
-        if j==5 then v:SetTexture(0,0,0,0) end
+        if j==5 then v:SetColorTexture(0,0,0,0) end
         v:SetHeight(C.global.font_size+default_border*2)
       end
 
@@ -431,8 +422,9 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
         _G["ChatFrame" .. i .. "TabFlash"].Show = function() return end
       end
 
-      local _, class = UnitClass("player")
-      _G["ChatFrame" .. i .. "TabText"]:SetTextColor((RAID_CLASS_COLORS[class].r + .3) * .5, (RAID_CLASS_COLORS[class].g + .3) * .5, (RAID_CLASS_COLORS[class].b + .3) * .5, 1)
+      local class = UnitClassBase("player")
+      local classColor = PFUI_CLASS_COLORS[class]
+      _G["ChatFrame" .. i .. "TabText"]:SetTextColor((classColor.r + .3) * .5, (classColor.g + .3) * .5, (classColor.b + .3) * .5, 1)
       _G["ChatFrame" .. i .. "TabText"]:SetFont(panelfont,panelfont_size, "OUTLINE")
 
       if _G["ChatFrame" .. i].isDocked or _G["ChatFrame" .. i]:IsVisible() then
@@ -448,9 +440,13 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     for index, value in pairs(DOCKED_CHAT_FRAMES) do
       FCF_UpdateButtonSide(value)
     end
+
+    pfUI.chat:RefreshBackgroundAlpha()
   end
 
   hooksecurefunc("FCF_SaveDock", pfUI.chat.RefreshChat)
+  hooksecurefunc("FCF_SetWindowAlpha", function() pfUI.chat:RefreshBackgroundAlpha() end)
+  hooksecurefunc("FCF_SelectDockFrame", function() pfUI.chat:RefreshBackgroundAlpha() end)
 
   if C.chat.global.tabmouse == "1" then
     pfUI.chat.mouseovertab = CreateFrame("Frame")
@@ -460,10 +456,10 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
 
       if pfUI.chat.hideLock then return end
 
-      if MouseIsOver(pfUI.chat.left, 10, -10, -10, 10) then
+      if pfUI.chat.left:IsMouseOver(10, -10, -10, 10) then
         pfUI.chat.left.panelTop:Show()
         FCF_DockUpdate()
-      elseif MouseIsOver(pfUI.chat.right, 10, -10, -10, 10) then
+      elseif pfUI.chat.right:IsMouseOver(10, -10, -10, 10) then
         -- disable while dock is active
         if pfUI.chat.right:GetAlpha() == 0 then return end
 
@@ -501,7 +497,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     FCF_SetLocked(ChatFrame1, 1)
     FCF_SetWindowName(ChatFrame1, GENERAL)
     FCF_SetWindowColor(ChatFrame1, 0, 0, 0)
-    FCF_SetWindowAlpha(ChatFrame1, 0)
+    FCF_SetWindowAlpha(ChatFrame1, 0.8)
     FCF_SetChatWindowFontSize(ChatFrame1, 12)
     ChatFrame1:SetUserPlaced(1)
 
@@ -509,7 +505,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     FCF_SetLocked(ChatFrame2, 1)
     FCF_SetWindowName(ChatFrame2, COMBAT_LOG)
     FCF_SetWindowColor(ChatFrame2, 0, 0, 0)
-    FCF_SetWindowAlpha(ChatFrame2, 0)
+    FCF_SetWindowAlpha(ChatFrame2, 0.8)
     FCF_SetChatWindowFontSize(ChatFrame2, 12)
     ChatFrame2:SetUserPlaced(1)
 
@@ -519,7 +515,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
       FCF_SetLocked(ChatFrame3, 1)
       FCF_SetWindowName(ChatFrame3, T["Loot & Spam"])
       FCF_SetWindowColor(ChatFrame3, 0, 0, 0)
-      FCF_SetWindowAlpha(ChatFrame3, 0)
+      FCF_SetWindowAlpha(ChatFrame3, 0.8)
       FCF_SetChatWindowFontSize(ChatFrame3, 12)
       FCF_UnDockFrame(ChatFrame3)
       FCF_SetTabPosition(ChatFrame3, 0)
@@ -567,6 +563,9 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
   end
 
   pfUI.chat:SetScript("OnEvent", function()
+    -- restore legacy chat windows stuck at 0 alpha before anything reads it
+    pfUI.chat:MigrateBackgroundAlpha()
+
     -- set the default chat
     FCF_SelectDockFrame(SELECTED_CHAT_FRAME)
 
@@ -676,7 +675,7 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
   end
 
   -- read and parse whisper color settings
-  local cr, cg, cb, ca = strsplit(",", C.chat.global.whisper)
+  local cr, cg, cb, ca = GetStringColor(C.chat.global.whisper)
   cr, cg, cb = tonumber(cr), tonumber(cg), tonumber(cb)
   local wcol = rgbhex(cr, cg, cb)
 
@@ -707,25 +706,25 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     _G.CHAT_WHISPER_INFORM_GET = '[W]' .. default
   end
 
-  local r,g,b,a = strsplit(",", C.chat.text.timecolor)
+  local r,g,b,a = GetStringColor(C.chat.text.timecolor)
   local timecolorhex = rgbhex(r,g,b,a)
 
-  local r,g,b = strsplit(",", C.chat.text.unknowncolor)
-  local unknowncolorhex = rgbhex(r,g,b)
+  -- AddMessage puts the time between these at the start of each line
+  local timestampStart = timecolorhex .. tleft
+  local timestampEnd = tright .. "|r "
 
-  local nothing = function() return end
-  local original = FriendsFrame_OnEvent
-
-  local who_query = CreateFrame("Frame")
-  who_query:RegisterEvent("WHO_LIST_UPDATE")
-  who_query:SetScript("OnEvent", function()
-    if this.pending then
-      -- restore everything once a query is received
-      _G.FriendsFrame_OnEvent = original
-      this.pending = nil
-      SetWhoToUI(0)
+  -- [ StripTimestamp ]
+  -- Returns a chat line without the timestamp AddMessage put before it.
+  function pfUI.chat.StripTimestamp(text)
+    if C.chat.text.time ~= "1" or text:sub(1, #timestampStart) ~= timestampStart then
+      return text
     end
-  end)
+    local _, last = text:find(timestampEnd, #timestampStart + 1, true)
+    return last and text:sub(last + 1) or text
+  end
+
+  local r,g,b = GetStringColor(C.chat.text.unknowncolor)
+  local unknowncolorhex = rgbhex(r,g,b)
 
   local function GetPlayerLevel(name)
     if not pfUI_playerDB then return nil end
@@ -733,24 +732,19 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
     return pfUI_playerDB[name].level
   end
 
-  local function ScanWhoName(name)
-    -- abort if another query is ongoing
-    if who_query.pending then return end
-    who_query.pending = true
-
-    -- prepare and send the who query
-    _G.FriendsFrame_OnEvent = nothing
-    SetWhoToUI(1)
-    SendWho("n-"..name)
-  end
-
-  local function AddMessage(frame, text, a1, a2, a3, a4, a5)
+  -- Passes every argument after the text on: GetMessageInfo returns them all,
+  -- and a hook that drops some loses them for every frame after it.
+  local function AddMessage(frame, text, ...)
     if not text then return end
 
     -- skip chat parsing on combat log
     if frame.pfCombatLog then
-      return frame:HookAddMessage(text, a1, a2, a3, a4, a5)
+      return frame:HookAddMessage(text, ...)
     end
+
+    -- payload of the CHAT_MSG event printing this line; nil for lines
+    -- that don't come from one (system text, addon output, history)
+    local event, _, sender, _, _, _, _, _, _, _, _, _, guid = GetCurrentChatEvent()
 
     -- Remove prat CLINKs
     text = gsub(text, "{CLINK:(%x+):([%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-):([^}]-)}", "|c%1|Hitem:%2|h[%3]|h|r") -- tbc
@@ -767,79 +761,89 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
       text = pfUI.chat:HandleLink(text)
     end
 
-    -- display class colors if already indexed
-    if C.chat.text.classcolor == "1" then
-      for name in gfind(text, "|Hplayer:(.-)|h") do
-        local real, _ = strsplit(":", name)
-        local color = unknowncolorhex
-        local match = false
-        local class = GetUnitData(real)
-
-        if class then
-          if class ~= UNKNOWN then
-            color = rgbhex(RAID_CLASS_COLORS[class])
-            match = true
-          end
-        elseif C.chat.text.whosearchunknown == "1" then
-          ScanWhoName(name)
-        end
-
-        if C.chat.text.tintunknown == "1" or match then
-          text = string.gsub(text, "|Hplayer:"..name.."|h%["..real.."%]|h(.-:-)",
-            left..color.."|Hplayer:"..name.."|h" .. color .. real .. "|h|r"..right.."%1")
-        end
+    -- display class colors and player levels if already indexed
+    local classcolor = C.chat.text.classcolor == "1"
+    local playerlevel = C.chat.text.playerlevel == "1"
+    if classcolor or playerlevel then
+      -- the engine name-queries a chat sender before the event fires,
+      -- so the sender's GUID always resolves; other names in the text
+      -- fall back to the name-keyed lookups
+      local _, senderClass, senderRace, senderSex
+      if classcolor and guid and guid ~= "" then
+        _, senderClass, _, senderRace, senderSex = GetPlayerInfoByGUID(guid)
       end
-    end
 
-    -- display player levels if available
-    if C.chat.text.playerlevel == "1" then
       for name in gfind(text, "|Hplayer:(.-)|h") do
         local real, _ = strsplit(":", name)
-        local level = GetPlayerLevel(real)
+        local color, icon = "", ""
 
+        if classcolor then
+          local class, raceKey, sex
+          if senderClass and real == sender then
+            class, raceKey, sex = senderClass, senderRace, senderSex
+          else
+            _, class, _, raceKey, sex = C_PlayerCache.GetPlayerInfoByName(real)
+          end
+          if not class then
+            class = GetUnitInfo(real)
+          end
+          if class and class ~= UNKNOWN then
+            color = "|c" .. PFUI_CLASS_COLORS[class].colorStr
+            if C.chat.text.factionicons == "1" then
+              icon = GetFactionIcon(raceKey)
+            end
+            if C.chat.text.raceicons == "1" then
+              icon = icon .. GetRaceIcon(raceKey, sex)
+            end
+          elseif C.chat.text.tintunknown == "1" then
+            color = unknowncolorhex
+          end
+        end
+
+        local suffix = ""
+        local level = playerlevel and GetPlayerLevel(real)
         if level and level > 0 then
-          local levelcolor = rgbhex(GetDifficultyColor(level))
-          -- Add level after the player name, before the closing bracket
-          text = string.gsub(text, "(|Hplayer:" .. name .. "|h.-|h|r)" .. right,
-            "%1 " .. levelcolor .. level .. "|r" .. right)
-        elseif level and level <= 0 then
+          suffix = " " .. rgbhex(GetDifficultyColor(level)) .. level .. "|r"
+        elseif level then
           -- Show ?? for unknown levels (e.g. -1 from UnitLevel)
-          text = string.gsub(text, "(|Hplayer:" .. name .. "|h.-|h|r)" .. right,
-            "%1 |cffff0000??|r" .. right)
+          suffix = " |cffff0000??|r"
+        end
+
+        if color ~= "" or suffix ~= "" then
+          text = string.gsub(text, "|Hplayer:"..name.."|h%["..real.."%]|h(.-:-)",
+            left..icon..color.."|Hplayer:"..name.."|h" .. color .. real .. "|h|r"..suffix..right.."%1")
         end
       end
     end
 
     -- reduce channel name to number
-    if C.chat.text.channelnumonly == "1" then
-      local channel = string.gsub(text, ".*%[(.-)%]%s+(.*|Hplayer).+", "%1")
-      if string.find(channel, "%d+%. ") then
-        channel = string.gsub(channel, "(%d+)%..*", "channel%1")
-        channel = string.gsub(channel, "channel", "")
-        text = string.gsub(text, "%[%d+%..-%]%s+(.*|Hplayer)", left .. channel .. right .. " %1")
-      end
+    if C.chat.text.channelnumonly == "1" and event == "CHAT_MSG_CHANNEL" then
+      text = string.gsub(text, "%[(%d+)%..-%] ", left .. "%1" .. right .. " ", 1)
+    end
+
+    -- detect the whisper prefix BEFORE prepending a timestamp; the timestamp
+    -- pushes the whisper colour code off position 1 and the find below fails
+    local isWhisper = C.chat.global.whispermod == "1" and string.find(text, wcol, 1) == 1
+
+    if isWhisper then
+      -- patch incoming whisper string to match the colors, before the
+      -- timestamp so it keeps the form StripTimestamp looks for
+      text = string.gsub(text, "|r", "|r" .. wcol)
     end
 
     -- show timestamp in chat
     if C.chat.text.time == "1" then
-      text = timecolorhex .. tleft .. date(C.chat.text.timeformat) .. tright .. "|r " .. text
+      text = timestampStart .. date(C.chat.text.timeformat) .. timestampEnd .. text
     end
 
     -- save chat history
-    if C.chat.global.whispermod == "1" and string.find(text, wcol, 1) == 1 then
+    if isWhisper then
       SaveChatHistory(frame:GetID(), string.gsub(text, wcol, ""), cr, cg, cb)
     else
-      SaveChatHistory(frame:GetID(), text, a1, a2, a3)
+      SaveChatHistory(frame:GetID(), text, ...)
     end
 
-    if C.chat.global.whispermod == "1" then
-      -- patch incoming whisper string to match the colors
-      if string.find(text, wcol, 1) == 1 then
-        text = string.gsub(text, "|r", "|r" .. wcol)
-      end
-    end
-
-    frame:HookAddMessage(text, a1, a2, a3, a4, a5)
+    frame:HookAddMessage(text, ...)
   end
 
   for i=1,NUM_CHAT_WINDOWS do
@@ -849,12 +853,9 @@ pfUI:RegisterModule("chat", "vanilla:tbc", function ()
 
     if not _G["ChatFrame"..i].HookAddMessage then
       if C.chat.text.history == "1" then
-        -- write history to chat
-        local history = GetChatHistory(i)
-        for j=30,0,-1 do
-          if history[j] then
-            _G["ChatFrame"..i]:AddMessage(history[j], .7,.7,.7)
-          end
+        -- write history to chat, newest first, above the lines already there
+        for _, msg in ipairs(GetChatHistory(i)) do
+          _G["ChatFrame"..i]:BackFillMessage(msg, .7,.7,.7)
         end
       end
 

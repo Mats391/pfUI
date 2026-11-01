@@ -1,4 +1,4 @@
-pfUI:RegisterModule("player", "vanilla:tbc", function ()
+pfUI:RegisterModule("player", function ()
   -- do not go further on disabled UFs
   if C.unitframes.disable == "1" then return end
 
@@ -34,54 +34,25 @@ pfUI:RegisterModule("player", "vanilla:tbc", function ()
     playerFrame.infoTopCenterText:SetHeight(14)
   end
 
-  local _, myclass = UnitClass("player")
+  local myclass = UnitClassBase("player")
   playerFrame.myclass = myclass
   playerFrame.isSpellCaster = myclass ~= "WARRIOR" and myclass ~= "ROGUE" and myclass ~= "HUNTER"
 
-  -- Compute class-based casting speed modifier and cache on the frame.
-  -- This is re-evaluated on LEARNED_SPELL_IN_TAB (with 1s delay) so talent changes are handled.
-  -- Not sure if there are any other effects that give % cast reduction time
-  local function UpdatePlayerModCastingTime()
-    playerFrame.modCastingTime = 1
-    if myclass == "MAGE" then
-      local _, _, _, _, acceleratedArcana = GetTalentInfo(1, 16)
-      if acceleratedArcana and acceleratedArcana > 0 then
-        playerFrame.modCastingTime = 0.95
-      end
-    elseif myclass == "WARLOCK" then
-      local _, _, _, _, rapidDeter = GetTalentInfo(1, 14)
-      if rapidDeter and rapidDeter > 0 then
-        playerFrame.modCastingTime = 1 - (rapidDeter * 0.03)
-      end
-    end
-  end
-
-  local talentFrame = CreateFrame("Frame")
-  talentFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-  talentFrame:RegisterEvent("LEARNED_SPELL_IN_TAB")
-  talentFrame:SetScript("OnEvent", function()
-    -- Delay 1s for both PLAYER_ENTERING_WORLD and LEARNED_SPELL_IN_TAB
-    local checkAt = GetTime() + 1
-    talentFrame:SetScript("OnUpdate", function()
-      if GetTime() >= checkAt then
-        talentFrame:SetScript("OnUpdate", nil)
-        UpdatePlayerModCastingTime()
-      end
-    end)
-  end)
-
   -- Convert "r,g,b,a" config color string to a 6-char hex string, or nil if unset
-  local function cfgColorToHex(colorStr)
-    if not colorStr or colorStr == "" then return nil end
-    local r, g, b = strsplit(",", colorStr)
-    r, g, b = tonumber(r), tonumber(g), tonumber(b)
-    if not r or not g or not b then return nil end
-    return string.format("%02X%02X%02X", r * 255, g * 255, b * 255)
-  end
+  local cfgColorToHexTable = setmetatable({}, {
+    __index = function (t, colorStr)
+      if not colorStr or colorStr == "" then return nil end
+      local r, g, b = GetStringColor(colorStr)
+      if not r or not g or not b then return nil end
+      local hex = C_ColorUtil.GenerateTextColorCode({ r=r, g = g, b=b})
+      rawset(t, colorStr, hex)
+      return hex
+    end
+  })
 
-  -- SP school colors indexed by GetSpellPower("net") return order
+  -- SP school colors indexed by GetSpellBonusDamage's 1-based school order
   -- (1=phys, 2=holy, 3=fire, 4=nature, 5=frost, 6=shadow, 7=arcane)
-  local spColors = { "FFFFFF", "FFFF80", "FF8000", "4DFF4D", "80FFFF", "9482C9", "FFFFFF" }
+  local spColors = { "FFFFFFFF", "FFFFFF80", "FFFF8000", "FF4DFF4D", "FF80FFFF", "FF9482C9", "FFFFFFFF" }
 
   -- Default SP school per class used as tiebreaker when multiple schools are equal
   local spDefaultSchool = {
@@ -90,56 +61,47 @@ pfUI:RegisterModule("player", "vanilla:tbc", function ()
     MAGE    = 7, WARLOCK = 6,
   }
 
-  -- Compute and cache the haste/SP text; called from OnUpdate, throttled to 0.25s
+  -- Compute the haste/SP text; called on haste, spell power and config changes
   local function UpdateInfoText()
-    if not GetUnitField then return end -- do nothing for older nampower
-
     local cfg = playerFrame.config
     if not cfg then
       return
     end
-    local hasteMode = cfg.display_haste  -- "0"=none, "1"=modCastSpeed, "2"=modCastSpeed*modCastingTime
-    local showSP = cfg.display_spellpower == "1"
-
+    -- display_haste: "0"=hidden, "1"=show cast-speed haste (UnitSpellHaste,
+    -- from UNIT_MOD_CAST_SPEED). Talent/spell-specific cast-time reductions
+    -- show up in the actual cast bar via C_Spell.UnitCastingInfo; folding them
+    -- in here too was mixing two different concepts into one number.
     local isSpellCaster = playerFrame.isSpellCaster
-    if (hasteMode == "0" or not isSpellCaster) and not showSP then
+    local showHaste = isSpellCaster and cfg.display_haste == "1"
+    local showSP    = isSpellCaster and cfg.display_spellpower == "1"
+
+    if not showHaste and not showSP then
       playerFrame.infoTopCenterText:SetText("")
       return
     end
 
-    local haste = GetUnitField("player", "modCastSpeed")
-    local modCastingTime = playerFrame.modCastingTime or 1
-    local text = ""
+    local parts = {}
 
-    if isSpellCaster and haste then
-      local hasteHex = cfgColorToHex(cfg.display_haste_color) or "FFFFFF"
-      if hasteMode == "1" then
-        text = string.format("|cff%s%.1f%%|r", hasteHex, (1 / haste - 1) * 100)
-      elseif hasteMode == "2" then
-        text = string.format("|cff%s%.1f%%|r", hasteHex, (1 / (haste * modCastingTime) - 1) * 100)
-      end
+    if showHaste then
+      local hex = cfgColorToHexTable[cfg.display_haste_color] or "FFFFFFFF"
+      table.insert(parts, string.format("|c%s%.1f%%|r", hex, UnitSpellHaste("player")))
     end
 
-    if showSP and isSpellCaster then
-      local schools = { GetSpellPower("net") }
-      local defSchool = spDefaultSchool[myclass] or 2
-      local maxSP = schools[defSchool] or 0
-      local maxColor = spColors[defSchool]
+    if showSP then
+      local school = spDefaultSchool[myclass] or 2
+      local maxSP = GetSpellBonusDamage(school) or 0
       for i = 2, 7 do  -- skip physical (1)
-        local v = schools[i] or 0
-        if v > maxSP then
-          maxSP = v
-          maxColor = spColors[i]
-        end
+        local v = GetSpellBonusDamage(i) or 0
+        if v > maxSP then maxSP, school = v, i end
       end
+
       if maxSP > 0 then
-        local spHex = (cfg.display_sp_color_override == "1" and cfgColorToHex(cfg.display_sp_color)) or maxColor
-        if text ~= "" then text = text .. "    " end
-        text = text .. string.format("|cff%s+%d SP|r", spHex, maxSP)
+        local hex = (cfg.display_sp_color_override == "1" and cfgColorToHexTable[cfg.display_sp_color]) or spColors[school]
+        table.insert(parts, string.format("|c%s+%d SP|r", hex, maxSP))
       end
     end
 
-    playerFrame.infoTopCenterText:SetText(text)
+    playerFrame.infoTopCenterText:SetText(table.concat(parts, "    "))
   end
 
   -- Keep a reference to the generic UF UpdateConfig so we can chain it
@@ -151,20 +113,24 @@ pfUI:RegisterModule("player", "vanilla:tbc", function ()
   end
 
   -- Add throttle to player frame OnUpdate
+  -- Throttle the unit frame's existing OnUpdate to ~20 FPS so the per-frame
+  -- work stays cheap.
   if pfUI.uf.player:GetScript("OnUpdate") then
     local originalOnUpdate = pfUI.uf.player:GetScript("OnUpdate")
     pfUI.uf.player:SetScript("OnUpdate", function()
-      if (this.throttleTick or 0) > GetTime() then
-        return
-      end
-      this.throttleTick = GetTime() + 0.05  -- Default: 20 FPS
+      if (this.throttleTick or 0) > GetTime() then return end
+      this.throttleTick = GetTime() + 0.05
       originalOnUpdate()
-      if (this.infoTextTick or 0) <= GetTime() then
-        this.infoTextTick = GetTime() + 0.25 -- Don't need to update haste/SP text as often
-        UpdateInfoText()
-      end
     end)
   end
+
+  -- PLAYER_DAMAGE_DONE_MODS fires on the MOD_DAMAGE_DONE fields that
+  -- GetSpellBonusDamage reads, so gear, buffs and talents all reach it.
+  pfUI.events:RegisterFrameEventAndCallback("PLAYER_ENTERING_WORLD", UpdateInfoText)
+  pfUI.events:RegisterFrameEventAndCallback("PLAYER_DAMAGE_DONE_MODS", UpdateInfoText)
+  pfUI.events:RegisterFrameEventAndCallback("UNIT_SPELL_HASTE", function(_, unit)
+    if unit == "player" then UpdateInfoText() end
+  end)
 
   -- Replace default's RESET_INSTANCES button with an always working one
   UnitPopupButtons["RESET_INSTANCES_FIX"] = { text = RESET_INSTANCES, dist = 0 }

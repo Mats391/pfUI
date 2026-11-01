@@ -1,8 +1,8 @@
-pfUI:RegisterSkin("Trainer", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Trainer", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
 
-  HookAddonOrVariable("Blizzard_TrainerUI", function()
+  HookAddon("Blizzard_TrainerUI", function()
     StripTextures(ClassTrainerFrame)
     CreateBackdrop(ClassTrainerFrame, nil, nil, .75)
     CreateBackdropShadow(ClassTrainerFrame)

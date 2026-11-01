@@ -3,13 +3,11 @@ function SlashCmdList.RELOAD(msg, editbox)
   ReloadUI()
 end
 
+local addonName = ...
+
 SLASH_PFUI1 = '/pfui'
 function SlashCmdList.PFUI(msg, editbox)
-  if pfUI.gui:IsShown() then
-    pfUI.gui:Hide()
-  else
-    pfUI.gui:Show()
-  end
+  pfUI.gui:SetShown(not pfUI.gui:IsShown())
 end
 
 SLASH_GM1, SLASH_GM2 = '/gm', '/support'
@@ -17,20 +15,19 @@ function SlashCmdList.GM(msg, editbox)
   ToggleHelpFrame(1)
 end
 
-pfUI = CreateFrame("Frame", nil, UIParent)
+local pfUI = CreateFrame("Frame", addonName, UIParent)
 pfUI:RegisterEvent("ADDON_LOADED")
 
 -- setup bootvar
 pfUI.bootup = true
 
--- initialize saved variables
-pfUI_playerDB = {}
-pfUI_config = {}
-pfUI_init = {}
-pfUI_profiles = {}
-pfUI_addon_profiles = {}
-pfUI_cache = {}
-pfUI_throttle = {}
+pfUI_playerDB = pfUI_playerDB or {}
+pfUI_config = pfUI_config or {}
+pfUI_init = pfUI_init or {}
+pfUI_profiles = pfUI_profiles or {}
+pfUI_addon_profiles = pfUI_addon_profiles or {}
+pfUI_cache = pfUI_cache or {}
+pfUI_throttle = pfUI_throttle or {}
 
 -- localization
 pfUI_locale = {}
@@ -45,32 +42,36 @@ pfUI.skins = {}
 pfUI.environment = {}
 pfUI.movables = {}
 pfUI.version = {}
-pfUI.hooks = {}
 pfUI.env = {}
+
+-- Capability flag: this fork's pfActionBar buttons correctly handle the modern
+-- HookScript widget method, so ClassicAPI's AddOnCompat shim must NOT shadow
+-- HookScript during actionbar load (older forks branch on `if button.HookScript`
+-- and take a modern path they were never written for). This describes behavior,
+-- not identity: a fork that keeps the HookScript-correct actionbar code keeps
+-- the flag; one that lacks it should drop the flag and get the safe fallback.
+pfUI.handlesHookScript = true
+
+-- pfUI's own EventRegistry: carries pfUI's custom events ("bag:closed",
+-- "config:changed", ...) and game events alike. Register game events with
+-- RegisterFrameEventAndCallback instead of creating a frame per listener.
+pfUI.events = CreateFromMixins(EventRegistry)
+pfUI.events:OnLoad()
 
 -- check if macro addons are loaded (disables macrotweak/macroscan)
 function pfUI:MacroAddonsLoaded()
   return IsAddOnLoaded("Supermacro") or IsAddOnLoaded("SuperCleveRoidMacros") or IsAddOnLoaded("UltimaMacros")
 end
 
--- detect current addon path
-local tocs = { "", "-master", "-tbc", "-wotlk" }
-for _, name in pairs(tocs) do
-  local current = string.format("pfUI%s", name)
-  local _, title = GetAddOnInfo(current)
-  if title then
-    pfUI.name = current
-    pfUI.path = "Interface\\AddOns\\" .. current
-    break
-  end
-end
+pfUI.name = addonName
+pfUI.path = "Interface\\AddOns\\" .. addonName
 
 -- handle/convert media dir paths
 pfUI.media = setmetatable({}, { __index = function(tab,key)
   local value = tostring(key)
-  if strfind(value, "img:") then
+  if value:find("img:") then
     value = string.gsub(value, "img:", pfUI.path .. "\\img\\")
-  elseif strfind(value, "font:") then
+  elseif value:find("font:") then
     value = string.gsub(value, "font:", pfUI.path .. "\\fonts\\")
   else
     value = string.gsub(value, "Interface\\AddOns\\pfUI\\", pfUI.path .. "\\")
@@ -79,44 +80,38 @@ pfUI.media = setmetatable({}, { __index = function(tab,key)
   return value
 end})
 
--- cache client version
-local _, _, _, client = GetBuildInfo()
-client = client or 11200
-
--- detect client expansion
-if client >= 20000 and client <= 20400 then
-  pfUI.expansion = "tbc"
-  pfUI.client = client
-elseif client >= 30000 and client <= 30300 then
-  pfUI.expansion = "wotlk"
-  pfUI.client = client
-else
-  pfUI.expansion = "vanilla"
-  pfUI.client = client
-end
+pfUI.client = INTERFACE_VERSION
 
 -- setup pfUI namespace
 setmetatable(pfUI.env, {__index = getfenv(0)})
+pfUI.env._G = getfenv(0)
 
-function pfUI:UpdateColors()
-  if pfUI.expansion == "vanilla" then
-    -- update table to get unknown colors and blue shamans for vanilla
-    RAID_CLASS_COLORS = {
-      ["WARRIOR"] = { r = 0.78, g = 0.61, b = 0.43, colorStr = "ffc79c6e" },
-      ["MAGE"]    = { r = 0.41, g = 0.8,  b = 0.94, colorStr = "ff69ccf0" },
-      ["ROGUE"]   = { r = 1,    g = 0.96, b = 0.41, colorStr = "fffff569" },
-      ["DRUID"]   = { r = 1,    g = 0.49, b = 0.04, colorStr = "ffff7d0a" },
-      ["HUNTER"]  = { r = 0.67, g = 0.83, b = 0.45, colorStr = "ffabd473" },
-      ["SHAMAN"]  = { r = 0.14, g = 0.35, b = 1.0,  colorStr = "ff0070de" },
-      ["PRIEST"]  = { r = 1,    g = 1,    b = 1,    colorStr = "ffffffff" },
-      ["WARLOCK"] = { r = 0.58, g = 0.51, b = 0.79, colorStr = "ff9482c9" },
-      ["PALADIN"] = { r = 0.96, g = 0.55, b = 0.73, colorStr = "fff58cba" },
-    }
+-- every pfUI.api entry is also a global of the pfUI environment
+pfUI.api = setmetatable({}, {__newindex = function(api, key, value)
+  rawset(api, key, value)
+  pfUI.env[key] = value
+end})
 
-    RAID_CLASS_COLORS = setmetatable(RAID_CLASS_COLORS, { __index = function(tab,key)
-      return { r = 0.6,  g = 0.6,  b = 0.6,  colorStr = "ff999999" }
-    end})
-  end
+PFUI_CLASS_COLORS = setmetatable({
+  WARRIOR = { r = 0.78, g = 0.61, b = 0.43 },
+  MAGE    = { r = 0.25, g = 0.78, b = 0.92 },
+  ROGUE   = { r = 1,    g = 0.96, b = 0.41 },
+  DRUID   = { r = 1,    g = 0.49, b = 0.04 },
+  HUNTER  = { r = 0.67, g = 0.83, b = 0.45 },
+  SHAMAN  = { r = 0,    g = 0.44, b = 0.87 },
+  PRIEST  = { r = 1,    g = 1,    b = 1    },
+  WARLOCK = { r = 0.53, g = 0.53, b = 0.93 },
+  PALADIN = { r = 0.96, g = 0.55, b = 0.73 },
+}, { __index = function(t,k)
+  local unknownColor = CreateColor(0.6, 0.6, 0.6, 1)
+  unknownColor.colorStr = unknownColor:GenerateHexColor()
+  return unknownColor
+end})
+
+for _, classColor in pairs(PFUI_CLASS_COLORS) do
+  Mixin(classColor, ColorMixin)
+  classColor.a = 1
+  classColor.colorStr = classColor:GenerateHexColor()
 end
 
 function pfUI:UpdateFonts()
@@ -125,34 +120,20 @@ function pfUI:UpdateFonts()
 
   -- load font configuration
   local default, tooltip, unit, unit_name, combat
-  if pfUI_config.global.force_region == "1" and GetLocale() == "zhCN" and pfUI.expansion == "vanilla" then
+  if pfUI_config.global.force_region == "1" and GetLocale() == "zhCN" then
     -- force locale compatible fonts (zhCN 1.12)
     default = "Fonts\\FZXHLJW.TTF"
     tooltip = "Fonts\\FZXHLJW.TTF"
     combat = "Fonts\\FZXHLJW.TTF"
     unit = "Fonts\\FZXHLJW.TTF"
     unit_name = "Fonts\\FZXHLJW.TTF"
-  elseif pfUI_config.global.force_region == "1" and GetLocale() == "zhCN" and pfUI.expansion == "tbc" then
-    -- force locale compatible fonts (zhCN 2.4.3)
-    default = "Fonts\\ZYHei.ttf"
-    tooltip = "Fonts\\ZYHei.ttf"
-    combat = "Fonts\\ZYKai_C.ttf"
-    unit = "Fonts\\ZYKai_T.ttf"
-    unit_name = "Fonts\\ZYHei.ttf"
-  elseif pfUI_config.global.force_region == "1" and GetLocale() == "zhTW" and pfUI.expansion == "vanilla" then
+  elseif pfUI_config.global.force_region == "1" and GetLocale() == "zhTW" then
     -- force locale compatible fonts (zhTW 1.12)
     default = "Fonts\\FZXHLJW.ttf"
     tooltip = "Fonts\\FZXHLJW.ttf"
     combat = "Fonts\\FZXHLJW.ttf"
     unit = "Fonts\\FZXHLJW.ttf"
     unit_name = "Fonts\\FZXHLJW.ttf"
-  elseif pfUI_config.global.force_region == "1" and GetLocale() == "zhTW" and pfUI.expansion == "tbc" then
-    -- force locale compatible fonts (zhTW 2.4.3)
-    default = "Fonts\\bHEI01B.ttf"
-    tooltip = "Fonts\\bHEI01B.ttf"
-    combat = "Fonts\\bHEI01B.ttf"
-    unit = "Fonts\\bHEI01B.ttf"
-    unit_name = "Fonts\\bHEI01B.ttf"
   elseif pfUI_config.global.force_region == "1" and GetLocale() == "koKR" then
     -- force locale compatible fonts (koKR)
     default = "Fonts\\2002.TTF"
@@ -228,29 +209,42 @@ function pfUI:UpdateFonts()
   end
 end
 
-local translations
+-- the locale table is built on the first call, which comes from the
+-- api files, after the locale files have loaded
 function pfUI:GetEnvironment()
-  -- load api into environment
-  for m, func in pairs(pfUI.api or {}) do
-    pfUI.env[m] = func
+  if not pfUI.env.L then
+    local L = pfUI_locale[GetLocale()] or pfUI_locale["enUS"]
+    L["class"] = L["class"] or tInvert(LOCALIZED_CLASS_NAMES_MALE)
+    if not L["race"] then
+      L["race"] = {}
+      local i = 1
+      local raceInfo = C_CreatureInfo.GetRaceInfo(i)
+      while raceInfo ~= nil do
+        L["race"][raceInfo.clientFileString] = {
+          raceName = raceInfo.raceName,
+          raceID = raceInfo.raceID,
+          faction = C_CreatureInfo.GetFactionInfo(i).groupTag,
+        }
+        i = i + 1
+        raceInfo = C_CreatureInfo.GetRaceInfo(i)
+      end
+    end
+    pfUI.env.L = L
   end
-
-  if pfUI_config and pfUI_config.global and pfUI_config.global.language and not translations then
-    local lang = pfUI_config and pfUI_config.global and pfUI_config.global.language and pfUI_translation[pfUI_config.global.language] and pfUI_config.global.language or GetLocale()
-    pfUI.env.T = setmetatable(pfUI_translation[lang] or {}, { __index = function(tab,key)
-      local value = tostring(key)
-      rawset(tab,key,value)
-      return value
-    end})
-    translations = true
-  end
-
-  pfUI.env._G = getfenv(0)
-  pfUI.env.C = pfUI_config
-  pfUI.env.pfUI_throttle = pfUI_throttle
-  pfUI.env.L = (pfUI_locale[GetLocale()] or pfUI_locale["enUS"])
 
   return pfUI.env
+end
+
+-- C and T read the saved config, so they are set once it has loaded
+local function SetupConfigEnvironment()
+  local language = pfUI_config.global.language
+  local lang = pfUI_translation[language] and language or GetLocale()
+  pfUI.env.T = setmetatable(pfUI_translation[lang] or {}, { __index = function(tab,key)
+    local value = tostring(key)
+    rawset(tab,key,value)
+    return value
+  end})
+  pfUI.env.C = pfUI_config
 end
 
 -- [ New Module Registry ]
@@ -266,7 +260,7 @@ function pfUI:CheckNewModules()
   pfUI_init.seen_modules = pfUI_init.seen_modules or {}
 
   local pending = 0
-  local _, playerClass = UnitClass("player")
+  local playerClass = UnitClassBase("player")
   for _, entry in pairs(pfUI.new_modules) do
     if not pfUI_init.seen_modules[entry.name] and pfUI_init["finalize"] then
       if not entry.class or entry.class == playerClass then
@@ -324,14 +318,16 @@ function pfUI:CheckNewModules()
   end
 end
 
-function pfUI:RegisterModule(name, a2, a3)
+local function BackwardsCompatRegister(func, arg3)
+  if arg3 and type(func) == "string" and type(arg3) == "function" and func:find("vanilla") then
+    return arg3
+  end
+  return func
+end
+
+function pfUI:RegisterModule(name, func, arg3)
   if pfUI.module[name] then return end
-  local hasv = type(a2) == "string"
-  local func, version = hasv and a3 or a2, hasv and a2 or "vanilla:tbc:wotlk"
-
-  -- check for client compatibility
-  if not strfind(version, pfUI.expansion) then return end
-
+  func = BackwardsCompatRegister(func, arg3)
   pfUI.module[name] = func
   table.insert(pfUI.modules, name)
   if not pfUI.bootup then
@@ -339,14 +335,9 @@ function pfUI:RegisterModule(name, a2, a3)
   end
 end
 
-function pfUI:RegisterSkin(name, a2, a3)
+function pfUI:RegisterSkin(name, func, arg3)
   if pfUI.skin[name] then return end
-  local hasv = type(a2) == "string"
-  local func, version = hasv and a3 or a2, hasv and a2 or "vanilla:tbc:wotlk"
-
-  -- check for client compatibility
-  if not strfind(version, pfUI.expansion) then return end
-
+  func = BackwardsCompatRegister(func, arg3)
   pfUI.skin[name] = func
   table.insert(pfUI.skins, name)
   if not pfUI.bootup then
@@ -354,19 +345,19 @@ function pfUI:RegisterSkin(name, a2, a3)
   end
 end
 
+-- an error in one module or skin goes to the error handler without
+-- stopping the ones that load after it
 function pfUI:LoadModule(m)
   setfenv(pfUI.module[m], pfUI:GetEnvironment())
-  pfUI.module[m]()
+  securecallfunction(pfUI.module[m])
 end
 
 function pfUI:LoadSkin(s)
   setfenv(pfUI.skin[s], pfUI:GetEnvironment())
-  pfUI.skin[s]()
+  securecallfunction(pfUI.skin[s])
 end
 
 pfUI:SetScript("OnEvent", function()
-  -- enforce color updates on each event
-  pfUI:UpdateColors()
 
   -- make sure to initialize and set our fonts
   -- each time an addon got loaded but only
@@ -376,20 +367,29 @@ pfUI:SetScript("OnEvent", function()
   end
 
   if arg1 == pfUI.name then
-    -- read pfUI version from .toc file
-    local major, minor, fix = pfUI.api.strsplit(".", tostring(GetAddOnMetadata(pfUI.name, "Version")))
-    pfUI.version.major = tonumber(major) or 1
-    pfUI.version.minor = tonumber(minor) or 2
-    pfUI.version.fix   = tonumber(fix)   or 0
-    pfUI.version.string = pfUI.version.major .. "." .. pfUI.version.minor .. "." .. pfUI.version.fix
+    -- read pfUI version from .toc file. Source/dev installs leave Version as
+    -- "@project-version@" until release tooling substitutes it — mark those
+    -- explicitly as "dev" instead of pretending they're a real numbered build.
+    local raw = tostring(GetAddOnMetadata(pfUI.name, "Version"))
+    if raw:find("@") then
+      pfUI.version.major, pfUI.version.minor, pfUI.version.fix = 0, 0, 0
+      pfUI.version.string = "dev"
+    else
+      local major, minor, fix = pfUI.api.strsplit(".", (string.gsub(raw, "^[vV]", "")))
+      pfUI.version.major = tonumber(major) or 0
+      pfUI.version.minor = tonumber(minor) or 0
+      pfUI.version.fix   = tonumber(fix)   or 0
+      pfUI.version.string = pfUI.version.major .. "." .. pfUI.version.minor .. "." .. pfUI.version.fix
+    end
 
     -- use "Modern" as default profile on a fresh install
-    if pfUI.api.isempty(pfUI_init) and pfUI.api.isempty(pfUI_config) then
+    if TableIsEmpty(pfUI_init) and TableIsEmpty(pfUI_config) then
       pfUI_config = pfUI.api.CopyTable(pfUI_profiles["Modern"]) or {}
     end
 
     pfUI:LoadConfig()
     pfUI:MigrateConfig()
+    SetupConfigEnvironment()
     pfUI:UpdateFonts()
 
     -- load modules
@@ -475,6 +475,7 @@ function pfUI.SetupCVars()
 
   SetCVar("autoSelfCast", "1")
   SetCVar("profanityFilter", "0")
+  SetCVar("countdownForCooldowns", "1")
 
   MultiActionBar_ShowAllGrids()
   ALWAYS_SHOW_MULTIBARS = "1"
@@ -506,3 +507,5 @@ function pfUI.SetupCVars()
   end
   UIParentLoadAddOn("Blizzard_CombatText")
 end
+
+_G.PLAYER_BUFF_START_ID = -1

@@ -1,4 +1,4 @@
-pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
+pfUI:RegisterModule("addonbuttons", function ()
   if not pfUI.minimap then return end
   if C.abuttons.enable == "0" then return end
 
@@ -37,15 +37,10 @@ pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
 
   pfUI.addonbuttons.minimapbutton = CreateFrame("Button", "pfMinimapButton", pfUI.minimap or UIParent)
   pfUI.addonbuttons.minimapbutton:SetFrameLevel(24)
-  pfUI.addonbuttons.minimapbutton:SetWidth(12)
-  pfUI.addonbuttons.minimapbutton:SetHeight(12)
+  pfUI.addonbuttons.minimapbutton:SetSize(12, 12)
 
   pfUI.addonbuttons.minimapbutton:SetScript("OnClick", function()
-    if pfUI.addonbuttons:IsShown() then
-      pfUI.addonbuttons:Hide()
-    else
-      pfUI.addonbuttons:Show()
-    end
+    pfUI.addonbuttons:SetShown(not pfUI.addonbuttons:IsShown())
   end)
 
   pfUI.addonbuttons.buttons = {}
@@ -163,27 +158,25 @@ pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
     pfUI.addonbuttons:SetScale(pfUI.minimap:GetScale())
 
     pfUI.addonbuttons.minimapbutton:ClearAllPoints()
+    local mbtnWidth, mbtnHeight = pfUI.minimap:GetSize()
+    local dynamicSize = ceil((GetNumButtons() > 0 and GetNumButtons() or 1) / tonumber(C.abuttons.rowsize)) * GetStringSize() + tonumber(C.abuttons.spacing)
     if C.abuttons.position == "bottom" then
-      pfUI.addonbuttons:SetWidth(pfUI.minimap:GetWidth())
-      pfUI.addonbuttons:SetHeight(ceil((GetNumButtons() > 0 and GetNumButtons() or 1) / tonumber(C.abuttons.rowsize)) * GetStringSize() + tonumber(C.abuttons.spacing))
+      pfUI.addonbuttons:SetSize(mbtnWidth, dynamicSize)
       pfUI.addonbuttons:SetPoint("TOP", pfUI.minimap, "BOTTOM", 0 , -default_border * 3)
       SkinArrowButton(pfUI.addonbuttons.minimapbutton, "down")
       pfUI.addonbuttons.minimapbutton:SetPoint("BOTTOM", pfUI.minimap, "BOTTOM", 0, 4)
     elseif C.abuttons.position == "left" then
-      pfUI.addonbuttons:SetWidth(ceil((GetNumButtons() > 0 and GetNumButtons() or 1) / tonumber(C.abuttons.rowsize)) * GetStringSize() + tonumber(C.abuttons.spacing))
-      pfUI.addonbuttons:SetHeight(pfUI.minimap:GetHeight())
+      pfUI.addonbuttons:SetSize(dynamicSize, mbtnHeight)
       pfUI.addonbuttons:SetPoint("TOPRIGHT", pfUI.minimap, "TOPLEFT", -default_border * 3, 0)
       SkinArrowButton(pfUI.addonbuttons.minimapbutton, "left")
       pfUI.addonbuttons.minimapbutton:SetPoint("LEFT", pfUI.minimap, "LEFT", 4, 0)
     elseif C.abuttons.position == "top" then
-      pfUI.addonbuttons:SetWidth(pfUI.minimap:GetWidth())
-      pfUI.addonbuttons:SetHeight(ceil((GetNumButtons() > 0 and GetNumButtons() or 1) / tonumber(C.abuttons.rowsize)) * GetStringSize() + tonumber(C.abuttons.spacing))
+      pfUI.addonbuttons:SetSize(mbtnWidth, dynamicSize)
       pfUI.addonbuttons:SetPoint("BOTTOM", pfUI.minimap, "TOP", 0 , default_border * 3)
       SkinArrowButton(pfUI.addonbuttons.minimapbutton, "up")
       pfUI.addonbuttons.minimapbutton:SetPoint("TOP", pfUI.minimap, "TOP", 0, -4)
     elseif C.abuttons.position == "right" then
-      pfUI.addonbuttons:SetWidth(ceil((GetNumButtons() > 0 and GetNumButtons() or 1) / tonumber(C.abuttons.rowsize)) * GetStringSize() + tonumber(C.abuttons.spacing))
-      pfUI.addonbuttons:SetHeight(pfUI.minimap:GetHeight())
+      pfUI.addonbuttons:SetSize(dynamicSize, mbtnHeight)
       pfUI.addonbuttons:SetPoint("TOPLEFT", pfUI.minimap, "TOPRIGHT", default_border * 3, 0)
       SkinArrowButton(pfUI.addonbuttons.minimapbutton, "right")
       pfUI.addonbuttons.minimapbutton:SetPoint("RIGHT", pfUI.minimap, "RIGHT", -4, 0)
@@ -231,7 +224,7 @@ pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
       frame.backup.is_clamped_to_screen = frame:IsClampedToScreen()
       frame.backup.is_movable = frame:IsMovable()
       frame.backup.point = {frame:GetPoint()}
-      frame.backup.size = {frame:GetHeight(), frame:GetWidth()}
+      frame.backup.size = {frame:GetSize()}
       frame.backup.scale = frame:GetScale()
       if frame:HasScript("OnDragStart") then
         frame.backup.on_drag_start = frame:GetScript("OnDragStart")
@@ -256,8 +249,7 @@ pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
       frame:SetClampedToScreen(frame.backup.is_clamped_to_screen)
       frame:SetMovable(frame.backup.is_movable)
       frame:SetScale(frame.backup.scale)
-      frame:SetHeight(frame.backup.size[1])
-      frame:SetWidth(frame.backup.size[2])
+      frame:SetSize(frame.backup.size[2], frame.backup.size[1])
       frame:ClearAllPoints()
       frame:SetPoint(frame.backup.point[1], frame.backup.point[2], frame.backup.point[3], frame.backup.point[4], frame.backup.point[5])
       if frame.backup.on_drag_start ~= nil then
@@ -405,22 +397,22 @@ pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
     pfUI.addonbuttons:ProcessButtons()
   end)
 
-  pfUI.addonbuttons:SetScript("OnUpdate", function()
-    -- check if the panel should be shown by default
-    if not this.initialized then
-      if C.abuttons.showdefault == "1" and GetNumButtons() > 0 then
-        pfUI.addonbuttons:Show()
-      else
-        pfUI.addonbuttons:Hide()
-      end
+  -- Initial setup on the next frame, once other addons' minimap buttons exist
+  RunNextFrame(function()
+    -- rescan before deciding whether the panel should be shown by default
+    pfUI.addonbuttons:ProcessButtons()
 
-      -- update all buttons
-      pfUI.addonbuttons:ProcessButtons()
-      this.initialized = true
+    pfUI.addonbuttons:SetShown(C.abuttons.showdefault == "1" and GetNumButtons() > 0)
+
+    -- apply workarounds
+    for k, v in pairs(pfUI.addonbuttons.overrides) do
+      _G[k] = v
     end
+  end)
 
-    -- throttle updates to once per 5 seconds
-    if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + 5 end
+  -- Rescan minimap buttons every 5 seconds while the panel is shown
+  C_Timer.NewTicker(5, function()
+    if not pfUI.addonbuttons:IsShown() then return end
 
     -- reload/rescan minimap buttons
     pfUI.addonbuttons:ProcessButtons()
@@ -440,6 +432,5 @@ pfUI:RegisterModule("addonbuttons", "vanilla:tbc", function ()
 
   pfUI.addonbuttons:UpdateConfig()
 
-  _G.SLASH_PFABP1, _G.SLASH_PFABP2 = "/abp", "/pfabp"
-  _G.SlashCmdList.PFABP = ManualAddOrRemove
+  pfUI.api.RegisterSlashCommand("PFABP", { "/abp", "/pfabp" }, ManualAddOrRemove, true)
 end)

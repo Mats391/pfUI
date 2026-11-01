@@ -1,5 +1,3 @@
-pfUI.api = { }
-
 -- load pfUI environment
 setfenv(1, pfUI:GetEnvironment())
 
@@ -59,21 +57,15 @@ function pfUI.api.GetUnitDistance(unit1, unit2)
   return nil
 end
 
--- [ UnitInLineOfSight ]
--- Returns true if unit1 has line of sight to unit2
--- Requires UnitXP_SP3
-function pfUI.api.UnitInLineOfSight(unit1, unit2)
-  if not pfUI.api.HasUnitXP() then return nil end
-  local success, inSight = pcall(UnitXP, "inSight", unit1, unit2)
-  if success then return inSight end
-  return nil
-end
-
 -- [ UnitIsBehind ]
 -- Returns true if unit1 is behind unit2
 -- Requires UnitXP_SP3
 function pfUI.api.UnitIsBehind(unit1, unit2)
   if not pfUI.api.HasUnitXP() then return nil end
+  if not unit2 then
+    unit2 = unit1
+    unit1 = "player"
+  end
   local success, behind = pcall(UnitXP, "behind", unit1, unit2)
   if success then return behind end
   return nil
@@ -84,30 +76,11 @@ gfind = string.gmatch or string.gfind
 mod = math.mod or mod
 
 -- [ strsplit ]
--- Splits a string using a delimiter.
--- 'delimiter'  [string]        characters that will be interpreted as delimiter
---                              characters (bytes) in the string.
--- 'subject'    [string]        String to split.
--- return:      [list]          a list of strings.
-function pfUI.api.strsplit(delimiter, subject)
-  if not subject then return nil end
-  local delimiter, fields = delimiter or ":", {}
-  local pattern = string.format("([^%s]+)", delimiter)
-  string.gsub(subject, pattern, function(c) fields[table.getn(fields)+1] = c end)
-  return unpack(fields)
-end
-
--- [ isempty ]
--- Returns true if a table is empty or not existing, otherwise false.
--- 'tbl'         [table]        the table that shall be checked
--- return:      [boolean]       result of the check.
-function pfUI.api.isempty(tbl)
-  if not tbl then return true end
-  for k, v in pairs(tbl) do
-    return false
-  end
-  return true
-end
+-- ClassicAPI's strsplit, taken from the ClassicAPI table, which no addon can
+-- overwrite. Third-party addons replace the global strsplit / string.split
+-- (e.g. BigWigs' SpellRequests makes string:split return a table), and bare
+-- strsplit calls inside the pfUI environment resolve to this copy.
+pfUI.api.strsplit = ClassicAPI.strsplit
 
 -- [ checkversion ]
 -- Compares a given version (major,minor,fix) and compares it to the current
@@ -131,83 +104,93 @@ function pfUI.api.checkversion(chkmajor, chkminor, chkfix)
 end
 
 -- [ UnitInRange ]
--- Returns whether a party/raid member is nearby.
--- It takes care of the rangecheck module if existing.
+-- Returns whether a party/raid member is nearby, by the configured range check.
 -- unit         [string]        A unit to query (string, unitID)
 -- return:      [bool]          "1" if in range otherwise "nil"
-local RangeCache = {}
 function pfUI.api.UnitInRange(unit)
   if not UnitExists(unit) or not UnitIsVisible(unit) then
     return nil
-  else
-    return librange:UnitInSpellRange(unit)
+  elseif CheckInteractDistance(unit, 4) then
+    return 1
   end
 
-  -- UnitXP precise mode: skip librange entirely, use direct distance check
+  -- master switch: with the 40y check off, a visible unit beyond interact
+  -- range counts as in range (nothing fades). Invisible units already
+  -- returned nil above, matching the pre-collapse behavior.
+  if C.unitframes.rangecheck == "0" then return 1 end
+
+  -- UnitXP precise mode: direct distance check against the configured range
   if C.unitframes.rangecheck_mode == "unitxp" and _G.UnitXP then
     local threshold = tonumber(C.unitframes.rangecheck_distance) or 40
     local success, distance = pcall(_G.UnitXP, "distanceBetween", "player", unit)
     if success and distance then
       return distance <= threshold and 1 or nil
     end
-    -- fallthrough to librange if UnitXP fails
+    -- fallthrough to the 40y check if UnitXP fails
   end
 
-  if pfUI.api.librange then
-    return pfUI.api.librange:UnitInSpellRange(unit)
-  end
-  return nil
-end
-
-function pfUI.api.UnitIn20ydRange(unit)
-  return librange:UnitIn20ydSpellRange(unit)
-end
-
-function pfUI.api.UnitIn10ydRange(unit)
-  if not _G.UnitXP then
-    return 0
-  else
-    local success, distance = pcall(_G.UnitXP, "distanceBetween", "player", unit)
-    return success and distance <= 10
-  end
-end
-
--- [ RunOOC ]
--- Runs a function once, as soon as the combat lockdown fades.
--- func         [function]      The function that shall run ooc.
--- return:      [bool]          true if the function was added,
---                              nil if the function already exists in queue
-local queue, frame = {}
-function pfUI.api.RunOOC(func)
-  if not frame then
-    frame = CreateFrame("Frame")
-    frame:SetScript("OnUpdate", function()
-      if InCombatLockdown and InCombatLockdown() then return end
-      for key, func in pairs(queue) do func(); queue[key] = nil end
-    end)
-  end
-
-  if not queue[tostring(func)] then
-    queue[tostring(func)] = func
-    return true
-  end
+  -- ClassicAPI's 40y check, _G-qualified since the bare name is this function
+  -- inside the pfUI environment. A unit it can't place (outside the client's
+  -- sync range) counts as in range.
+  local inRange, checked = _G.UnitInRange(unit)
+  return (inRange or not checked) and 1 or nil
 end
 
 -- [ UnitHasBuff ]
--- Returns whether a unit has the given buff or not.
+-- Returns whether a unit has the named buff or not.
 -- unit         [string]        A unit to query (string, unitID)
--- buff         [string]        The texture of the buff.
+-- name         [string]        The localized name of the buff.
 -- return:      [bool]          true if unit has buff otherwise "nil"
-function pfUI.api.UnitHasBuff(unit, buff)
-  local hasbuff = nil
-  for i=1,32 do
-    if UnitBuff(unit, i) == buff then
-      hasbuff = true
-      break
+function pfUI.api.UnitHasBuff(unit, name)
+  return C_UnitAuras.GetAuraDataBySpellName(unit, name, "HELPFUL") ~= nil or nil
+end
+
+-- [ ScanAuraSlots ]
+-- Fills `buf` with the slot ids of the auras on `unit` that match `filter` and
+-- returns how many (buf[1..n]; entries past n are cleared), so a module can
+-- keep one buffer and refill it every refresh. Read each aura with
+-- C_UnitAuras.UnitAuraBySlot(unit, buf[i]) (positional, no table) or
+-- GetAuraDataBySlot. One enumeration walks the aura array once, where a
+-- by-index loop (UnitAura(unit, i)) re-walks it from the start for every i.
+-- Uses GetAuraSlots' fill-a-table form (table as the 5th argument) instead of
+-- its vararg return: Lua 5.0 builds an `arg` table for every vararg call, so
+-- collecting the returns in a Lua helper would allocate once per scan.
+-- unit         [string]        unit token
+-- filter       [string]        aura filter ("HELPFUL", "HARMFUL|PLAYER", ...)
+-- buf          [table]         reusable buffer, filled in place
+-- max          [number]        optional cap on the slot count (nil = all)
+-- return:      [number]        count of slot ids written to buf
+function pfUI.api.ScanAuraSlots(unit, filter, buf, max)
+  local _, n = C_UnitAuras.GetAuraSlots(unit, filter, max, nil, buf)
+  return n
+end
+
+-- [ IsPlayerGuid ]
+-- Returns whether a GUID or unit token refers to the local player.
+-- guid         [string]        A unit GUID (or unitID) to test.
+-- return:      [bool]          true if it is the player otherwise "false"
+pfUI.api.IsPlayerGuid = _G.IsPlayerGuid
+
+-- [ GetUnbuffedRoster ]
+-- Returns a comma-joined, colored list of group members missing the named aura.
+-- name         [string]        the localized aura name to check for
+-- return:      [string]        comma-joined list, empty string if everyone has it
+function pfUI.api.GetUnbuffedRoster(name)
+  local missing = {}
+  local function check(unit)
+    if UnitName(unit) and not pfUI.api.UnitHasBuff(unit, name) then
+      table.insert(missing, GetUnitColor(unit) .. UnitName(unit) .. "|r")
     end
   end
 
-  return hasbuff
+  if IsInRaid() then
+    for i=1,40 do check("raid"..i) end
+  else
+    check("player")
+    for i=1,4 do check("party"..i) end
+  end
+
+  return table.concat(missing, ", ")
 end
 
 -- [[ GetUnitColor ]]
@@ -215,14 +198,40 @@ end
 -- unit         [string]        the unitstring
 -- return:      [table]         string, r, g, b
 function pfUI.api.GetUnitColor(unitstr)
-  local _, class = UnitClass(unitstr)
+  local class = UnitClassBase(unitstr)
+  local classColor = PFUI_CLASS_COLORS[class]
+  return classColor:GenerateHexColorMarkup(), classColor:GetRGB()
+end
 
-  local r, g, b = .8, .8, .8
-  if RAID_CLASS_COLORS[class] then
-    r, g, b = RAID_CLASS_COLORS[class].r, RAID_CLASS_COLORS[class].g, RAID_CLASS_COLORS[class].b
-  end
+-- [ GetRaceIcon ]
+-- Builds an inline race icon texture from the shared races atlas.
+-- 'raceKey'    [string]        englishRace key (e.g. "NightElf")
+-- 'sex'        [int]           unit sex (3 = female)
+-- return:      [string]        inline texture escape, or an empty string
+function pfUI.api.GetRaceIcon(raceKey, sex)
+  if not raceKey then return "" end
+  local gender = sex == 3 and "FEMALE" or "MALE"
+  local coords = RACE_ICON_TCOORDS[strupper(raceKey) .. "_" .. gender]
+  if not coords then return "" end
+  return string.format(
+    "|TInterface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races:0:0:0:0:512:512:%d:%d:%d:%d|t",
+    coords[1] * 512, coords[2] * 512, coords[3] * 512, coords[4] * 512)
+end
 
-  return pfUI.api.rgbhex(r,g,b), r, g, b
+-- inline faction emblems (cropped from the target-frame PvP banners)
+local FACTION_ICON = {
+  Alliance = "|TInterface\\TargetingFrame\\UI-PVP-Alliance:0:0:0:0:64:64:5:37:3:35|t",
+  Horde    = "|TInterface\\TargetingFrame\\UI-PVP-Horde:0:0:0:0:64:64:5:37:3:35|t",
+}
+
+-- [ GetFactionIcon ]
+-- Resolves an inline faction emblem from the englishRace key stored in L["race"].
+-- 'raceKey'    [string]        englishRace key (e.g. "Orc")
+-- return:      [string]        inline texture escape, or an empty string
+function pfUI.api.GetFactionIcon(raceKey)
+  local info = raceKey and L["race"][raceKey]
+  if not info then return "" end
+  return FACTION_ICON[info.faction] or ""
 end
 
 -- [ strvertical ]
@@ -252,31 +261,12 @@ function pfUI.api.round(input, places)
   end
 end
 
--- [ clamp ]
--- Clamps a number between given range.
--- 'x'          [number]        the number that should be clamped.
--- 'min'        [number]        minimum value.
--- 'max'        [number]        maximum value.
--- returns:     [number]        clamped value: 'x', 'min' or 'max' value itself.
-function pfUI.api.clamp(x, min, max)
-  if type(x) == "number" and type(min) == "number" and type(max) == "number" then
-    return x < min and min or x > max and max or x
-  else
-    return x
-  end
-end
-
--- [ modf ]
--- Returns integral and fractional part of a number.
--- 'f'          [float]        the number to breakdown.
--- returns:     [int],[float]  whole and fractional part.
-function pfUI.api.modf(f)
-  if modf then return modf(f) end
-  if f > 0 then
-    return math.floor(f), mod(f,1)
-  end
-  return math.ceil(f), mod(f,1)
-end
+-- [ GetServerEpoch ]
+-- Returns a Unix epoch (seconds) representing the current server wall
+-- clock, packed in the player's local timezone so that date(fmt, epoch)
+-- prints server-time strings regardless of where the player sits.
+-- Returns nil before login; date(fmt, nil) silently falls back to local time.
+pfUI.api.GetServerEpoch = C_DateAndTime.GetServerTimeLocal
 
 -- [ GetSlashCommands ]
 -- Lists all registeres slash commands
@@ -363,61 +353,53 @@ end
 -- 'str'        [string]         input string that should be matched
 -- 'pat'        [string]         unformatted pattern
 -- returns:     [strings]        matched string in capture order
-local a, b, c, d, e
-local _, va, vb, vc, vd, ve
-local ra, rb, rc, rd, re
 function pfUI.api.cmatch(str, pat)
-  -- read capture indexes
-  a, b, c, d, e = GetCaptures(pat)
-  _, _, va, vb, vc, vd, ve = string.find(str, pfUI.api.SanitizePattern(pat))
+  -- idx* = the logical %N index of each physical capture slot (nil when the
+  -- pattern has no %N$ markers); val* = the matched values in physical order.
+  local idx1, idx2, idx3, idx4, idx5 = GetCaptures(pat)
+  local _, _, val1, val2, val3, val4, val5 = string.find(str, pfUI.api.SanitizePattern(pat))
 
-  -- put entries into the proper return values
-  ra = e == 1 and ve or d == 1 and vd or c == 1 and vc or b == 1 and vb or va
-  rb = e == 2 and ve or d == 2 and vd or c == 2 and vc or a == 2 and va or vb
-  rc = e == 3 and ve or d == 3 and vd or a == 3 and va or b == 3 and vb or vc
-  rd = e == 4 and ve or a == 4 and va or c == 4 and vc or b == 4 and vb or vd
-  re = a == 5 and va or d == 5 and vd or c == 5 and vc or b == 5 and vb or ve
+  -- reorder the physical matches into logical (%1..%5) order
+  local out1 = idx5 == 1 and val5 or idx4 == 1 and val4 or idx3 == 1 and val3 or idx2 == 1 and val2 or val1
+  local out2 = idx5 == 2 and val5 or idx4 == 2 and val4 or idx3 == 2 and val3 or idx1 == 2 and val1 or val2
+  local out3 = idx5 == 3 and val5 or idx4 == 3 and val4 or idx1 == 3 and val1 or idx2 == 3 and val2 or val3
+  local out4 = idx5 == 4 and val5 or idx1 == 4 and val1 or idx3 == 4 and val3 or idx2 == 4 and val2 or val4
+  local out5 = idx1 == 5 and val1 or idx4 == 5 and val4 or idx3 == 5 and val3 or idx2 == 5 and val2 or val5
 
-  return ra, rb, rc, rd, re
+  return out1, out2, out3, out4, out5
 end
 
 -- [ GetItemLinkByName ]
 -- Returns an itemLink for the given itemname
 -- 'name'       [string]         name of the item
 -- returns:     [string]         entire itemLink for the given item
+local itemLinkCache = {}
+local itemLinkMisses = {}
+local ITEMLINK_MAX_SCANS = 2
 function pfUI.api.GetItemLinkByName(name)
-  for itemID = 1, 25818 do
-    local itemName, hyperLink, itemQuality = GetItemInfo(itemID)
-    if (itemName and itemName == name) then
-      local _, _, _, hex = GetItemQualityColor(tonumber(itemQuality))
-      return hex.. "|H"..hyperLink.."|h["..itemName.."]|h|r"
-    end
-  end
-end
+  -- GetInboxItem() hands us a nil name for attachment-less mail
+  if not name then return end
+  -- cache successful resolutions so repeated lookups (e.g. per inbox click) are free
+  if itemLinkCache[name] then return itemLinkCache[name] end
 
--- [ GetItemCount ]
--- Returns information about how many of a given item the player has.
--- 'itemName'   [string]         name of the item
--- returns:     [int]            the number of the given item
-function pfUI.api.GetItemCount(itemName)
-  local count = 0
-  for bag = 4, 0, -1 do
-    for slot = 1, GetContainerNumSlots(bag) do
-      local _, itemCount = GetContainerItemInfo(bag, slot)
-      if itemCount then
-        local itemLink = GetContainerItemLink(bag,slot)
-        local _, _, itemParse = strfind(itemLink, "(%d+):")
-        local queryName = GetItemInfo(itemParse)
-        if queryName and queryName ~= "" then
-          if queryName == itemName then
-            count = count + itemCount
-          end
-        end
-      end
+  -- Failures have to be counted, not just retried. An unresolvable name walks
+  -- the entire id range and finds nothing -- a visible hitch on every tooltip
+  -- hover. Allow a couple of attempts (rendering the tooltip caches the item,
+  -- so the next hover usually resolves), then stop scanning for that name.
+  local misses = itemLinkMisses[name] or 0
+  if misses >= ITEMLINK_MAX_SCANS then return end
+
+  -- Octo/Turtle custom items live well past the 25818 vanilla ceiling
+  for itemID = 1, 61000 do
+    local itemName = C_Item.GetItemNameByID(itemID)
+    if itemName and itemName == name then
+      local _, itemLink = C_Item.GetItemInfo(itemID)
+      itemLinkCache[name] = itemLink
+      return itemLink
     end
   end
 
-  return count
+  itemLinkMisses[name] = misses + 1
 end
 
 -- [ FindItem ]
@@ -428,17 +410,12 @@ end
 function pfUI.api.FindItem(item)
   for bag = 4, 0, -1 do
     for slot = 1, GetContainerNumSlots(bag) do
-      local itemLink = GetContainerItemLink(bag,slot)
-      if itemLink then
-        local _, _, parse = strfind(itemLink, "(%d+):")
-        local query = GetItemInfo(parse)
-        if query and query ~= "" and string.lower(query) == string.lower(item) then
-          return bag, slot
-        end
+      local query = C_Item.GetItemName(ItemLocation:CreateFromBagAndSlot(bag, slot))
+      if query and query ~= "" and string.lower(query) == string.lower(item) then
+        return bag, slot
       end
     end
   end
-
   return nil
 end
 
@@ -452,52 +429,51 @@ function pfUI.api.GetBagFamily(bag)
   if bag == 0 then return "BAG" end -- backpack
   if bag == -1 then return "BAG" end -- bank
 
-  local _, _, id = strfind(GetInventoryItemLink("player", ContainerIDToInventoryID(bag)) or "", "item:(%d+)")
+  local id = GetInventoryItemID("player", ContainerIDToInventoryID(bag))
   if id then
-    local _, _, _, _, _, itemType, subType = GetItemInfo(id)
-    local bagsubtype = L["bagtypes"][subType]
-
-    if bagsubtype == "DEFAULT" then return "BAG" end
-    if bagsubtype == "SOULBAG" then return "SOULBAG" end
-    if bagsubtype == "QUIVER" then return "QUIVER" end
-    if bagsubtype == nil then return "SPECIAL" end
+    -- classID 1 = Container (bags), 11 = Quiver
+    -- Container subclasses: 0 = Bag (default), 1 = Soul Bag, 2+ = specialty (herb/enchanting/etc.)
+    -- Quiver subclasses: 2 = Quiver (arrows), 3 = Ammo Pouch (bullets)
+    local _, _, _, _, _, classID, subClassID = C_Item.GetItemInfoInstant(id)
+    if classID == 1 then
+      if subClassID == 0 then return "BAG" end
+      if subClassID == 1 then return "SOULBAG" end
+      return "SPECIAL"
+    elseif classID == 11 then
+      return "QUIVER"
+    end
   end
 
   return nil
 end
 
 -- [ Abbreviate ]
--- Abbreviates a number from 1234 to 1.23k
+-- Abbreviates a number from 1234 to 1.23k, as the unitframes.abbrevnum
+-- setting asks: "0" full numbers, "1" 2 decimals (4250 -> 4.25k),
+-- "2" 1 decimal rounded down (4250 -> 4.2k)
 -- 'number'     [number]           the number that should be abbreviated
 -- 'returns:    [string]           the abbreviated value
+local function CreateAbbreviateFormatter(step, rounding)
+  local Down = Enum.NumericRuleFormatRounding.Down
+  local formatter = C_StringUtil.CreateNumericRuleFormatter()
+  formatter:SetBreakpoints({
+    { threshold = 0,       format = "%d",  components = { { step = 1, rounding = Down } } },
+    { threshold = 1000,    format = "%gk", components = { { div = 1000,    step = step, rounding = rounding } } },
+    { threshold = 1000000, format = "%gm", components = { { div = 1000000, step = step, rounding = rounding } } },
+  })
+  return formatter
+end
+
+local abbreviateFormatters = {
+  ["1"] = CreateAbbreviateFormatter(0.01, Enum.NumericRuleFormatRounding.Nearest),
+  ["2"] = CreateAbbreviateFormatter(0.1, Enum.NumericRuleFormatRounding.Down),
+}
+
 function pfUI.api.Abbreviate(number)
-  local mode = pfUI_config.unitframes.abbrevnum
-  -- mode "0" = disabled (full numbers)
-  -- mode "1" = 2 decimals (4250 -> 4.25k) [legacy/default]
-  -- mode "2" = 1 decimal (4250 -> 4.2k) - always rounds DOWN
-  
-  if mode == "1" or mode == "2" then
-    local sign = number < 0 and -1 or 1
-    number = math.abs(number)
-
-    if number > 1000000 then
-      if mode == "2" then
-        -- 1 decimal, round DOWN: 4.18m -> 4.1m
-        return (floor(number/100000) / 10 * sign) .. "m"
-      else
-        return pfUI.api.round(number/1000000*sign, 2) .. "m"
-      end
-    elseif number > 1000 then
-      if mode == "2" then
-        -- 1 decimal, round DOWN: 4180 -> 4.1k (not 4.2k)
-        return (floor(number/100) / 10 * sign) .. "k"
-      else
-        return pfUI.api.round(number/1000*sign, 2) .. "k"
-      end
-    end
-  end
-
-  return math.floor(number)
+  local formatter = abbreviateFormatters[pfUI_config.unitframes.abbrevnum]
+  if not formatter then return math.floor(number) end
+  if number < 0 then return "-" .. formatter:FormatNumber(-number) end
+  return formatter:FormatNumber(number)
 end
 
 -- [ SendChatMessageWide ]
@@ -505,7 +481,7 @@ end
 -- 'msg'        [string]          the message to send
 function pfUI.api.SendChatMessageWide(msg)
   local channel = "SAY"
-  if UnitInRaid("player") then
+  if IsInRaid() then
     if ( IsRaidLeader() or IsRaidOfficer() ) then
       channel = "RAID_WARNING"
     else
@@ -515,6 +491,14 @@ function pfUI.api.SendChatMessageWide(msg)
     channel = "PARTY"
   end
   SendChatMessage(msg,channel)
+end
+
+-- [ CopyText ]
+-- Copies text to the clipboard and says so in the colour of a UI_INFO_MESSAGE
+-- 'text'       [string]          the text to copy
+function pfUI.api.CopyText(text)
+  CopyToClipboard(text)
+  UIErrorsFrame:AddMessage(T["Copied to clipboard"], 1, 1, 0, 1)
 end
 
 -- [ GroupInfoByName ]
@@ -572,66 +556,30 @@ end
 -- 'script'     [string]            the handler to hook
 -- 'func'       [function]          the function that should be added
 function HookScript(f, script, func)
-  local prev = f:GetScript(script)
-  f:SetScript(script, function(a1,a2,a3,a4,a5,a6,a7,a8,a9)
-    if prev then prev(a1,a2,a3,a4,a5,a6,a7,a8,a9) end
-    func(a1,a2,a3,a4,a5,a6,a7,a8,a9)
-  end)
+  f:HookScript(script, func)
 end
 
--- [ HookAddonOrVariable ]
--- Sets a function to be called automatically once an addon gets loaded
--- 'addon'      [string]            addon or variable name
+function hooksecurefunc(tbl, name, func)
+  if type(tbl) == "string" then tbl, name, func = _G, tbl, name end
+  if not tbl or type(tbl[name]) ~= "function" then return end
+  return _G.hooksecurefunc(tbl, name, func)
+end
+
+-- [ HookAddon ]
+-- Runs a function once an addon has loaded, but never before PLAYER_LOGIN.
+-- Module and skin bodies run inside pfUI's own ADDON_LOADED, so an addon that
+-- is already loaded there would otherwise run its hook before later pfUI
+-- modules exist and before the addon's own VARIABLES_LOADED setup. A
+-- load-on-demand addon runs its hook on its ADDON_LOADED. Hooks for addons
+-- that are not installed are dropped. Hooks on the same addon run in no
+-- particular order.
+-- 'addon'      [string]            addon name
 -- 'func'       [function]          function that should run
-function pfUI.api.HookAddonOrVariable(addon, func)
-  local lurker = CreateFrame("Frame", nil)
-  lurker.func = func
-  lurker:RegisterEvent("ADDON_LOADED")
-  lurker:RegisterEvent("VARIABLES_LOADED")
-  lurker:RegisterEvent("PLAYER_ENTERING_WORLD")
-  lurker:SetScript("OnEvent",function()
-    -- only run when config is available
-    if event == "ADDON_LOADED" and not this.foundConfig then
-      return
-    elseif event == "VARIABLES_LOADED" then
-      this.foundConfig = true
-    end
-
-    if IsAddOnLoaded(addon) or _G[addon] then
-      this:func()
-      this:UnregisterAllEvents()
-    end
+function pfUI.api.HookAddon(addon, func)
+  if not C_AddOns.DoesAddOnExist(addon) then return end
+  EventUtil.ContinueOnPlayerLogin(function()
+    EventUtil.ContinueOnAddOnLoaded(addon, func)
   end)
-end
-
--- [ QueueFunction ]
--- Add functions to a FIFO queue for execution after a short delay.
--- '...'        [vararg]        function, [arguments]
-local timer
-function pfUI.api.QueueFunction(a1,a2,a3,a4,a5,a6,a7,a8,a9)
-  if not timer then
-    timer = CreateFrame("Frame")
-    timer.queue = {}
-    timer.interval = TOOLTIP_UPDATE_TIME
-    timer.DeQueue = function()
-      local item = table.remove(timer.queue,1)
-      if item then
-        item[1](item[2],item[3],item[4],item[5],item[6],item[7],item[8],item[9])
-      end
-      if table.getn(timer.queue) == 0 then
-        timer:Hide() -- no need to run the OnUpdate when the queue is empty
-      end
-    end
-    timer:SetScript("OnUpdate",function()
-      this.sinceLast = (this.sinceLast or 0) + arg1
-      while (this.sinceLast > this.interval) do
-        this.DeQueue()
-        this.sinceLast = this.sinceLast - this.interval
-      end
-    end)
-  end
-  table.insert(timer.queue,{a1,a2,a3,a4,a5,a6,a7,a8,a9})
-  timer:Show() -- start the OnUpdate
 end
 
 -- [ Create Gold String ]
@@ -642,63 +590,29 @@ end
 function pfUI.api.CreateGoldString(money)
   if type(money) ~= "number" then return "-" end
 
-  local gold = floor(money/ 100 / 100)
-  local silver = floor(mod((money/100),100))
-  local copper = floor(mod(money,100))
-
-  local string = ""
-  if gold > 0 then string = string .. "|cffffffff" .. gold .. "|cffffd700g" end
-  if silver > 0 or gold > 0 then string = string .. "|cffffffff " .. silver .. "|cffc7c7cfs" end
-  string = string .. "|cffffffff " .. copper .. "|cffeda55fc"
-
-  return string
+  return "|cffffffff" .. _G.GetCoinTextureString(money) .. "|r"
 end
 
 -- [ Enable Movable ]
 -- Set all necessary functions to make a already existing frame movable.
 -- 'name'       [frame/string]  Name of the Frame that should be movable
--- 'addon'      [string]        Addon that must be loaded before being able to access the frame
 -- 'blacklist'  [table]         A list of frames that should be deactivated for mouse usage
 local function OnDragStart() this:StartMoving() end
 local function OnDragStop() this:StopMovingOrSizing() end
-function pfUI.api.EnableMovable(name, addon, blacklist)
-  if addon then
-    local scan = CreateFrame("Frame")
-    scan:RegisterEvent("ADDON_LOADED")
-    scan:SetScript("OnEvent", function()
-      if arg1 == addon then
-        local frame = _G[name]
-
-        if blacklist then
-          for _, disable in pairs(blacklist) do
-            _G[disable]:EnableMouse(false)
-          end
-        end
-
-        frame:SetMovable(true)
-        frame:EnableMouse(true)
-        frame:RegisterForDrag("LeftButton")
-        frame:SetScript("OnDragStart", OnDragStart)
-        frame:SetScript("OnDragStop", OnDragStop)
-
-        this:UnregisterAllEvents()
-      end
-    end)
-  else
-    if blacklist then
-      for _, disable in pairs(blacklist) do
-        _G[disable]:EnableMouse(false)
-      end
+function pfUI.api.EnableMovable(name, blacklist)
+  if blacklist then
+    for _, disable in pairs(blacklist) do
+      _G[disable]:EnableMouse(false)
     end
-
-    local frame = name
-    if type(name) == "string" then frame = _G[name] end
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", OnDragStart)
-    frame:SetScript("OnDragStop", OnDragStop)
   end
+
+  local frame = name
+  if type(name) == "string" then frame = _G[name] end
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", OnDragStart)
+  frame:SetScript("OnDragStop", OnDragStop)
 end
 
 -- [ Copy Table ]
@@ -725,24 +639,15 @@ function pfUI.api.CopyTable(src)
 end
 
 -- [ Wipe Table ]
--- Empties a table and returns it
+-- Empties a table and returns it.
 -- 'src'      [table]         the table that should be emptied.
 -- return:    [table]         the emptied table.
+-- Delegates to ClassicAPI's table.wipe, which also resets the Lua 5.0 getn
+-- length (luaL_setn(t,0)) so table.insert on a wiped table resumes at [1].
+-- Append to wiped arrays with table.insert -- NOT the t[table.getn(t)+1]=v
+-- idiom, which needs an unmanaged length counter and won't work here.
 function pfUI.api.wipe(src)
-  -- notes: table.insert, table.remove will have undefined behavior
-  -- when used on tables emptied this way because Lua removes nil
-  -- entries from tables after an indeterminate time.
-  -- Instead of table.insert(t,v) use t[table.getn(t)+1]=v as table.getn collapses nil entries.
-  -- There are no issues with hash tables, t[k]=v where k is not a number behaves as expected.
-  local mt = getmetatable(src) or {}
-  if mt.__mode == nil or mt.__mode ~= "kv" then
-    mt.__mode = "kv"
-    src=setmetatable(src,mt)
-  end
-  for k in pairs(src) do
-    src[k] = nil
-  end
-  return src
+  return table.wipe(src)
 end
 
 -- [ Load Movable ]
@@ -1000,14 +905,32 @@ end
 
 -- [ GetStringColor ]
 -- Queries the pfUI setting strings and extract its color codes
--- returns r,g,b,a
-local color_cache = {}
-function pfUI.api.GetStringColor(colorstr)
-  if not color_cache[colorstr] then
-    local r, g, b, a = pfUI.api.strsplit(",", colorstr)
-    color_cache[colorstr] = { r, g, b, a }
+-- returns r,g,b,a as strings
+local color_cache = setmetatable({}, {
+  __index = function(t, k)
+    local color = { pfUI.api.strsplit(",", k) }
+    rawset(t, k, color)
+    return color
   end
+})
+function pfUI.api.GetStringColor(colorstr)
   return unpack(color_cache[colorstr])
+end
+
+-- [ GetStringColorObject ]
+-- Like GetStringColor, but returns a cached ColorMixin instead of raw values.
+-- The object is a shared per-string singleton, so treat it as read-only.
+-- returns a ColorMixin
+local color_object_cache = setmetatable({}, {
+  __index = function(t, k)
+    local r,g,b,a = pfUI.api.GetStringColor(k)
+    local color = CreateColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
+    rawset(t, k, color)
+    return color
+  end
+})
+function pfUI.api.GetStringColorObject(colorstr)
+  return color_object_cache[colorstr]
 end
 
 -- [ rgbhex ]
@@ -1017,12 +940,13 @@ end
 -- 'b'          [number]          optional b color component
 -- 'a'          [number]          optional alpha component
 -- returns color string in the form of '|caarrggbb'
-local _r, _g, _b, _a
+local rgbhex_cache = {}
 function pfUI.api.rgbhex(r, g, b, a)
+  local _r, _g, _b, _a
   if type(r) == "table" then
     if r.r then
       _r, _g, _b, _a = r.r, r.g, r.b, (r.a or 1)
-    elseif table.getn(r) >= 3 then
+    elseif r[3] ~= nil then
       _r, _g, _b, _a = r[1], r[2], r[3], (r[4] or 1)
     end
   elseif tonumber(r) then
@@ -1030,12 +954,13 @@ function pfUI.api.rgbhex(r, g, b, a)
   end
 
   if _r and _g and _b and _a then
-    -- limit values to 0-1
-    _r = _r + 0 > 1 and 1 or _r + 0
-    _g = _g + 0 > 1 and 1 or _g + 0
-    _b = _b + 0 > 1 and 1 or _b + 0
-    _a = _a + 0 > 1 and 1 or _a + 0
-    return string.format("|c%02x%02x%02x%02x", _a*255, _r*255, _g*255, _b*255)
+    local key = ((Round(_r*255)*256 + Round(_g*255))*256 + Round(_b*255))*256 + Round(_a*255)
+    local hex = rgbhex_cache[key]
+    if not hex then
+      hex = "|c" .. C_ColorUtil.GenerateTextColorCode({ r = _r, g = _g, b = _b, a = _a })
+      rgbhex_cache[key] = hex
+    end
+    return hex
   end
 
   return ""
@@ -1144,7 +1069,7 @@ function pfUI.api.CreateBackdrop(f, inset, legacy, transp, backdropSetting)
     f:SetBackdropBorderColor(er, eg, eb , ea)
   else
     -- increase clickable area if available
-    if f.SetHitRectInsets and ( not InCombatLockdown or not InCombatLockdown()) then
+    if f.SetHitRectInsets then
       f:SetHitRectInsets(-border,-border,-border,-border)
     end
 
@@ -1189,6 +1114,26 @@ function pfUI.api.CreateBackdrop(f, inset, legacy, transp, backdropSetting)
   end
 end
 
+-- [ Create FontString ]
+-- Get-or-create a FontString attached to `f` as the named field. Idempotent —
+-- subsequent calls return the existing FontString. Defaults to pfUI's typical
+-- font style: default font at config size, OUTLINE flag, OVERLAY layer.
+-- 'f'      [frame]   parent frame
+-- 'key'    [string]  field name on `f` to stash the FontString (e.g. "scoreText")
+-- 'layer'  [string]  draw layer. Defaults to "OVERLAY".
+-- 'size'   [int]     font size. Defaults to C.global.font_size.
+-- 'flags'  [string]  font flags. Defaults to "OUTLINE".
+-- 'font'   [string]  font path. Defaults to pfUI.font_default.
+function pfUI.api.CreateFontString(f, key, layer, size, flags, font)
+  if not f or not key then return end
+  if f[key] then return f[key] end
+
+  local fs = f:CreateFontString(nil, layer or "OVERLAY")
+  fs:SetFont(font or pfUI.font_default, size or C.global.font_size, flags or "OUTLINE")
+  f[key] = fs
+  return fs
+end
+
 -- [ Create Shadow ]
 -- Creates a pfUI compatible frame as shadow element
 -- 'f'          [frame]         the frame which should get a backdrop.
@@ -1210,17 +1155,46 @@ function pfUI.api.CreateBackdropShadow(f)
   f.backdrop_shadow:SetBackdropBorderColor(0, 0, 0, tonumber(pfUI_config.appearance.border.shadow_intensity))
 end
 
+-- [ Set Castbar Shield ]
+-- Colors a castbar for a cast that none of the player's own interrupts or
+-- silences can stop. The bar and the icon's border both take the shield color,
+-- so the state still reads on a bar configured without an icon. Not shielded
+-- restores the normal cast/channel color and the configured border.
+-- 'bar'        [frame]     the castbar statusbar
+-- 'icon'       [frame]     the icon frame, or nil for a bar without one
+-- 'shielded'   [bool]      whether the cast is uninterruptible
+-- 'isChannel'  [bool]      selects the unshielded color
+function pfUI.api.SetCastbarShield(bar, icon, shielded, isChannel)
+  if shielded then
+    bar:SetStatusBarColor(pfUI.api.GetStringColor(C.appearance.castbar.shieldcolor))
+  else
+    bar:SetStatusBarColor(pfUI.api.GetStringColor(C.appearance.castbar[isChannel and "channelcolor" or "castbarcolor"]))
+  end
+
+  local iconborder = icon and icon.backdrop
+  if not iconborder then return end
+
+  if shielded then
+    iconborder:SetBackdropBorderColor(pfUI.api.GetStringColor(C.appearance.castbar.shieldcolor))
+  else
+    iconborder:SetBackdropBorderColor(pfUI.api.GetStringColor(C.appearance.border.color))
+  end
+end
+
 -- [ Bar Layout Options ] --
 -- 'barsize'  size of bar in number of buttons
--- returns:   array of options as strings for pfUI.gui.bar
+-- returns:   array of options as strings for pfUI.gui.bar: every grid
+--            that fits the bar exactly, plus common uneven ones
 function pfUI.api.BarLayoutOptions(barsize)
   assert(barsize > 0 and barsize <= NUM_ACTIONBAR_BUTTONS,"BarLayoutOptions: barsize "..tostring(barsize).." is invalid")
   local options, seen = {}, {}
   local function add(option)
     if not seen[option] then table.insert(options, option); seen[option] = true end
   end
-  for i,layout in ipairs(pfGridmath[barsize]) do
-    add(string.format("%d x %d",layout[1],layout[2]))
+  for cols = 1, barsize do
+    if barsize % cols == 0 then
+      add(string.format("%d x %d", cols, barsize / cols))
+    end
   end
   for _, option in ipairs({
     "1 x 12", "1 x 10", "2 x 10", "2 x 5", "3 x 10", "3 x 5", "3 x 3",
@@ -1240,49 +1214,23 @@ function pfUI.api.BarLayoutOptions(barsize)
   return options
 end
 
--- [ Bar Layout Formfactor ] --
--- 'option'  string option as used in pfUI_config.bars[bar].option
--- returns:  integer formfactor
-local formfactors = {}
-setmetatable(formfactors, {__mode = "v"}) -- weak table so values not referenced are collected on next gc
-function pfUI.api.BarLayoutFormfactor(option)
-  if formfactors[option] then
-    return formfactors[option]
-  else
-    for barsize,_ in ipairs(pfGridmath) do
-      local options = pfUI.api.BarLayoutOptions(barsize)
-      for i,opt in ipairs(options) do
-        if opt == option then
-          formfactors[option] = i
-          return formfactors[option]
-        end
-      end
-    end
-  end
-end
-
+-- 'formfactor' has to be a "cols x rows" string; the actionbar module resets
+-- a stored layout that isn't one before it lays out a bar
 local function ResolveBarLayout(barsize, formfactor, uneven)
-  local layout = tostring(formfactor or "")
-  local _, _, a, b = string.find(layout, "(%d+)%s*x%s*(%d+)")
-  if a and b then
-    local cols, rows = tonumber(a), tonumber(b)
-    cols = math.min(NUM_ACTIONBAR_BUTTONS, math.max(1, cols))
-    rows = math.min(NUM_ACTIONBAR_BUTTONS, math.max(1, rows))
-    local orientation = string.upper(uneven or "DOWN")
-    local mode = (orientation == "LEFT" or orientation == "RIGHT") and "cols" or "rows"
-    if mode == "rows" then
-      cols = math.max(1, math.min(cols, barsize))
-      rows = math.max(1, math.ceil(barsize / cols))
-    else
-      rows = math.max(1, math.min(rows, barsize))
-      cols = math.max(1, math.ceil(barsize / rows))
-    end
-    return cols, rows, mode, orientation
+  local _, _, a, b = string.find(formfactor, "(%d+)%s*x%s*(%d+)")
+  local cols, rows = tonumber(a), tonumber(b)
+  cols = math.min(NUM_ACTIONBAR_BUTTONS, math.max(1, cols))
+  rows = math.min(NUM_ACTIONBAR_BUTTONS, math.max(1, rows))
+  local orientation = string.upper(uneven or "DOWN")
+  local mode = (orientation == "LEFT" or orientation == "RIGHT") and "cols" or "rows"
+  if mode == "rows" then
+    cols = math.max(1, math.min(cols, barsize))
+    rows = math.max(1, math.ceil(barsize / cols))
+  else
+    rows = math.max(1, math.min(rows, barsize))
+    cols = math.max(1, math.ceil(barsize / rows))
   end
-  local index = pfUI.api.BarLayoutFormfactor(layout)
-  if not index then return nil end
-  local cols, rows = unpack(pfGridmath[barsize][index])
-  return cols, rows, "rows", "DOWN"
+  return cols, rows, mode, orientation
 end
 
 -- [ Bar Layout Size ] --
@@ -1293,7 +1241,6 @@ end
 function pfUI.api.BarLayoutSize(bar,barsize,formfactor,iconsize,bordersize,padding,uneven,fillmode)
   assert(barsize > 0 and barsize <= NUM_ACTIONBAR_BUTTONS,"BarLayoutSize: barsize "..tostring(barsize).." is invalid")
   local cols, rows = ResolveBarLayout(barsize, formfactor, uneven)
-  if not cols or not rows then cols, rows = unpack(pfGridmath[barsize][1]) end
   local width = (iconsize + bordersize*2+padding) * cols + padding
   local height = (iconsize + bordersize*2+padding) * rows + padding
   bar._size = {width,height}
@@ -1311,9 +1258,6 @@ end
 function pfUI.api.BarButtonAnchor(button,basename,buttonindex,barsize,formfactor,iconsize,bordersize,padding,uneven,fillmode)
   assert(barsize > 0 and barsize <= NUM_ACTIONBAR_BUTTONS,"BarButtonAnchor: barsize "..tostring(barsize).." is invalid")
   local cols, rows, mode, orientation = ResolveBarLayout(barsize, formfactor, uneven)
-  if not cols or not rows then
-    cols, rows, mode, orientation = unpack(pfGridmath[barsize][1]), "rows", "DOWN"
-  end
 
   -- fillmode: remap buttonindex to slotindex (grid position in native fill order)
   -- only needed when fill direction differs from layout mode
@@ -1394,6 +1338,18 @@ function pfUI.api.BarButtonAnchor(button,basename,buttonindex,barsize,formfactor
   return button._anchor
 end
 
+-- [ MouseIsOverHitRect ] --
+-- Like frame:IsMouseOver(), but tests the frame's hit rect, the area the
+-- engine uses for mouse focus and OnEnter/OnLeave. CreateBackdrop widens
+-- that rect by the border, so plain IsMouseOver misses a band around it.
+-- 'frame'      the frame to test
+-- return       true when the cursor is inside the frame's hit rect
+function pfUI.api.MouseIsOverHitRect(frame)
+  if not frame.GetHitRectInsets then return frame:IsMouseOver() end
+  local left, right, top, bottom = frame:GetHitRectInsets()
+  return frame:IsMouseOver(-top, bottom, left, -right)
+end
+
 -- [ Enable Autohide ] --
 -- 'frame'  the frame that should be hidden
 function pfUI.api.EnableAutohide(frame, timeout, combat)
@@ -1406,11 +1362,20 @@ function pfUI.api.EnableAutohide(frame, timeout, combat)
   frame.hover.parent = frame
   frame.hover:Show()
 
+  if not frame.hover.fade then
+    frame.hover.fade = frame:CreateAnimationGroup()
+    local fade = frame.hover.fade:CreateAnimation("Alpha")
+    fade:SetChange(-1)
+    fade:SetDuration(1)
+    frame.hover.fade:SetScript("OnFinished", function() frame:SetAlpha(0) end)
+  end
+
   if combat then
     frame.hover:RegisterEvent("PLAYER_REGEN_ENABLED")
     frame.hover:RegisterEvent("PLAYER_REGEN_DISABLED")
     frame.hover:SetScript("OnEvent", function()
       if event == "PLAYER_REGEN_DISABLED" then
+        this.fade:Stop()
         this.parent:SetAlpha(1)
         this.activeTo = "keep"
       elseif event == "PLAYER_REGEN_ENABLED" then
@@ -1426,13 +1391,13 @@ function pfUI.api.EnableAutohide(frame, timeout, combat)
 
     if this.activeTo == "keep" then return end
 
-    if MouseIsOver(this, 10, -10, -10, 10) then
+    if this:IsMouseOver(10, -10, -10, 10) then
       this.activeTo = GetTime() + timeout
+      this.fade:Stop()
       this.parent:SetAlpha(1)
     elseif this.activeTo then
-      if this.activeTo < GetTime() and this.parent:GetAlpha() > 0 then
-        local fps = (60 / math.max(GetFramerate(), 1))
-        this.parent:SetAlpha(this.parent:GetAlpha() - 0.05*fps)
+      if this.activeTo < GetTime() and this.parent:GetAlpha() > 0 and not this.fade:IsPlaying() then
+        this.fade:Play()
       end
     else
       this.activeTo = GetTime() + timeout
@@ -1449,73 +1414,8 @@ function pfUI.api.DisableAutohide(frame)
   frame.hover:SetScript("OnEvent", nil)
   frame.hover:SetScript("OnUpdate", nil)
   frame.hover:Hide()
+  frame.hover.fade:Stop()
   frame:SetAlpha(1)
-end
-
--- [ GetColoredTime ] --
--- 'remaining'   the time in seconds that should be converted
--- return        a colored string including a time unit (m/h/d)
-local color_day, color_hour, color_minute, color_low, color_normal
-function pfUI.api.GetColoredTimeString(remaining)
-  if not remaining then return "" end
-
-  -- Show days if remaining is > 99 Hours (99 * 60 * 60)
-  if remaining > 356400 then
-    if not color_day then
-      local r,g,b,a = pfUI.api.GetStringColor(C.appearance.cd.daycolor)
-      color_day = pfUI.api.rgbhex(r,g,b)
-    end
-
-    return color_day .. round(remaining / 86400) .. "|rd"
-
-  -- Show hours if remaining is > 99 Minutes (99 * 60)
-  elseif remaining > 5940 then
-    if not color_hour then
-      local r,g,b,a = pfUI.api.GetStringColor(C.appearance.cd.hourcolor)
-      color_hour = pfUI.api.rgbhex(r,g,b)
-    end
-
-    return color_hour .. round(remaining / 3600) .. "|rh"
-
-  -- Show minutes if remaining is > 99 Seconds (99)
-  elseif remaining > 99 then
-    if not color_minute then
-      local r,g,b,a = pfUI.api.GetStringColor(C.appearance.cd.minutecolor)
-      color_minute = pfUI.api.rgbhex(r,g,b)
-    end
-
-    return color_minute .. round(remaining / 60) .. "|rm"
-
-  -- Show milliseconds on low
-  elseif remaining <= 5 and pfUI_config.appearance.cd.milliseconds == "1" then
-    if not color_low then
-      local r,g,b,a = pfUI.api.GetStringColor(C.appearance.cd.lowcolor)
-      color_low = pfUI.api.rgbhex(r,g,b)
-    end
-
-    return color_low .. string.format("%.1f", round(remaining,1))
-
-  -- Show seconds on low
-  elseif remaining <= 5 then
-    if not color_low then
-      local r,g,b,a = pfUI.api.GetStringColor(C.appearance.cd.lowcolor)
-      color_low = pfUI.api.rgbhex(r,g,b)
-    end
-
-    return color_low .. round(remaining)
-
-  -- Show seconds on normal
-  elseif remaining >= 0 then
-    if not color_normal then
-      local r, g, b, a = pfUI.api.GetStringColor(C.appearance.cd.normalcolor)
-      color_normal = pfUI.api.rgbhex(r,g,b)
-    end
-    return color_normal .. round(remaining)
-
-  -- Return empty
-  else
-    return ""
-  end
 end
 
 -- [ GetColorGradient ] --
@@ -1568,6 +1468,16 @@ end
 -- 'arg1'       [string]
 -- return object
 function pfUI.api.GetNoNameObject(frame, objtype, layer, arg1, arg2)
+  -- A nil/non-frame parent otherwise dies on frame:GetRegions()/:GetChildren()
+  -- below, and the traceback stops here — useless, since all callers share this
+  -- line. pfUI shadows Lua's `error` (dropping the level arg and not throwing),
+  -- so fold the caller frame in via debugstack to name the offending skin, then
+  -- bail so we don't fall through and crash on frame:GetRegions() anyway.
+  if type(frame) ~= "table" or not frame.GetRegions then
+    error("GetNoNameObject: invalid parent frame\n" .. debugstack(2, 3, 0))
+    return
+  end
+
   local arg1 = arg1 and gsub(arg1, "([%+%-%*%(%)%?%[%]%^])", "%%%1")
   local arg2 = arg2 and gsub(arg2, "([%+%-%*%(%)%?%[%]%^])", "%%%1")
 

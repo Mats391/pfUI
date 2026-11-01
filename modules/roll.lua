@@ -1,4 +1,4 @@
-pfUI:RegisterModule("roll", "vanilla:tbc", function ()
+pfUI:RegisterModule("roll", function ()
   pfUI.roll = CreateFrame("Frame", "pfLootRoll", UIParent)
   pfUI.roll.frames = {}
 
@@ -7,8 +7,12 @@ pfUI:RegisterModule("roll", "vanilla:tbc", function ()
   local LOOT_ROLL_NEED = string.gsub(LOOT_ROLL_NEED, "%%s|Hitem:%%d:%%d:%%d:%%d|h%[%%s%]|h%%s", "%%s")
   local LOOT_ROLL_PASSED = string.gsub(LOOT_ROLL_PASSED, "%%s|Hitem:%%d:%%d:%%d:%%d|h%[%%s%]|h%%s", "%%s")
 
-  -- try to detect the everyone string
-  local _, _, everyone, _ = strfind(LOOT_ROLL_ALL_PASSED, LOOT_ROLL_PASSED)
+  -- detect the "everyone passed" subject exactly as the loot scanner will capture
+  -- it: feed a dummy item into LOOT_ROLL_ALL_PASSED and run the same LOOT_ROLL_PASSED
+  -- match. (The old strfind had no captures, so `everyone` was always nil and
+  -- "Everyone has passed on: X" got counted as a fake roller.)
+  local everyoneSample = string.gsub(LOOT_ROLL_ALL_PASSED, "%%s", "x")
+  local everyone = cmatch(everyoneSample, LOOT_ROLL_PASSED)
   pfUI.roll.blacklist = { YOU, everyone }
 
   pfUI.roll.cache = {}
@@ -42,7 +46,8 @@ pfUI:RegisterModule("roll", "vanilla:tbc", function ()
     end
 
     local _, _, itemLink = string.find(hyperlink, "(item:%d+:%d+:%d+:%d+)")
-    local itemName = GetItemInfo(itemLink)
+    local itemName = C_Item.GetItemInfo(itemLink)
+    if not itemName then return end -- uncached item: avoid cache[nil] "table index is nil"
 
     -- delete obsolete tables
     if pfUI.roll.cache[itemName] and pfUI.roll.cache[itemName]["TIMESTAMP"] < GetTime() - 60 then
@@ -95,7 +100,7 @@ pfUI:RegisterModule("roll", "vanilla:tbc", function ()
     f.icon:SetWidth(esize)
     f.icon:SetHeight(esize)
 
-    f.icon.tex = f.icon:CreateTexture("OVERLAY")
+    f.icon.tex = f.icon:CreateTexture(nil, "OVERLAY")
     f.icon.tex:SetTexCoord(.08, .92, .08, .92)
     f.icon.tex:SetAllPoints(f.icon)
 
@@ -234,7 +239,7 @@ pfUI:RegisterModule("roll", "vanilla:tbc", function ()
     f.time.bar:SetAllPoints(f.time)
     f.time.bar:SetStatusBarTexture(pfUI.media["img:bar"])
     f.time.bar:SetMinMaxValues(0, 100)
-    local r, g, b, a = strsplit(",", C.appearance.border.color)
+    local r, g, b, a = GetStringColor(C.appearance.border.color)
     f.time.bar:SetStatusBarColor(r, g, b)
     f.time.bar:SetValue(20)
     f.time.bar:SetScript("OnUpdate", function()

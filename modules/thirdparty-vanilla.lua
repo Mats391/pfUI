@@ -1,9 +1,9 @@
-pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
+pfUI:RegisterModule("thirdparty-vanilla", function()
   -- abort when thirdparty core module is not loaded
   if not pfUI.thirdparty then return end
   local rawborder, default_border = GetBorderSize()
 
-  HookAddonOrVariable("KLHThreatMeter", function()
+  HookAddon("KLHThreatMeter", function()
     local ktm_scale = 1
     local function GetKtmWidthDiff(view, match_size)
       local default_width = 0
@@ -100,10 +100,10 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
       CreateBackdropShadow(KLHTM_Frame)
 
       if C.thirdparty.chatbg == "1" and C.chat.global.custombg == "1" then
-        local r, g, b, a = strsplit(",", C.chat.global.background)
+        local r, g, b, a = GetStringColor(C.chat.global.background)
         KLHTM_Frame.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
 
-        local r, g, b, a = strsplit(",", C.chat.global.border)
+        local r, g, b, a = GetStringColor(C.chat.global.border)
         KLHTM_Frame.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
       end
 
@@ -122,7 +122,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
         -- remove red background on some buttons
         for i,v in ipairs({b:GetRegions()}) do
           if v.SetTexture and i == 1 then
-            v:SetTexture(0,0,0,0)
+            v:SetColorTexture(0,0,0,0)
           end
         end
 
@@ -159,7 +159,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end
   end)
 
-  HookAddonOrVariable("TWThreat", function()
+  HookAddon("TWThreat", function()
     local docktable = { "twt", "TODO", "TWTMain",
       function() -- single
         TWTMain:ClearAllPoints()
@@ -199,10 +199,10 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
       CreateBackdropShadow(TWTMain)
 
       if C.thirdparty.chatbg == "1" and C.chat.global.custombg == "1" then
-        local r, g, b, a = strsplit(",", C.chat.global.background)
+        local r, g, b, a = GetStringColor(C.chat.global.background)
         TWTMain.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
 
-        local r, g, b, a = strsplit(",", C.chat.global.border)
+        local r, g, b, a = GetStringColor(C.chat.global.border)
         TWTMain.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
       end
 
@@ -232,7 +232,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end
   end)
 
-  HookAddonOrVariable("SW_Stats", function()
+  HookAddon("SW_Stats", function()
     local docktable = { "swstats", "TODO", "SW_BarFrame1",
       function() -- single
         SW_BarFrame1:SetWidth(pfUI.chat.right:GetWidth())
@@ -267,7 +267,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
         SW_BarFrame1_Selector:Hide()
 
         -- let user select mode by clicking the title
-        HookScript(SW_BarFrame1_Title, "OnMouseUp", function()
+        SW_BarFrame1_Title:HookScript("OnMouseUp", function()
           local page = SW_Settings and SW_Settings.BarFrames and SW_Settings.BarFrames.SW_BarFrame1 and SW_Settings.BarFrames.SW_BarFrame1.Selected
           if page then
             local target = (arg1 == "LeftButton") and (page + 1) or (arg1 == "RightButton") and (page - 1)
@@ -328,10 +328,10 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
       CreateBackdropShadow(SW_BarFrame1)
 
       if C.thirdparty.chatbg == "1" and C.chat.global.custombg == "1" then
-        local r, g, b, a = strsplit(",", C.chat.global.background)
+        local r, g, b, a = GetStringColor(C.chat.global.background)
         SW_BarFrame1.backdrop:SetBackdropColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
 
-        local r, g, b, a = strsplit(",", C.chat.global.border)
+        local r, g, b, a = GetStringColor(C.chat.global.border)
         SW_BarFrame1.backdrop:SetBackdropBorderColor(tonumber(r), tonumber(g), tonumber(b), tonumber(a))
       end
 
@@ -518,7 +518,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end
   end)
 
-  HookAddonOrVariable("WIM", function()
+  HookAddon("WIM", function()
     if C.thirdparty.wim.enable == "0" then return end
 
     -- use pfUI link handler if available
@@ -531,9 +531,9 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
 
     -- replace wim class colors with pfUI ones
     hooksecurefunc("WIM_InitClassProps", function()
-      for class in pairs(RAID_CLASS_COLORS) do
+      for class in pairs(PFUI_CLASS_COLORS) do
         local wimclass = _G[format("WIM_LOCALIZED_%s",class)]
-        local colorstr = rgbhex(RAID_CLASS_COLORS[class].r, RAID_CLASS_COLORS[class].g, RAID_CLASS_COLORS[class].b, RAID_CLASS_COLORS[class].a)
+        local colorstr = "|c" .. PFUI_CLASS_COLORS[class].colorStr
         _G.WIM_ClassColors[wimclass] = gsub(colorstr, "^|cff", "")
       end
     end)
@@ -798,7 +798,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
 
   -- SortBags
   -- Vanilla: https://github.com/shirsig/SortBags-vanilla
-  HookAddonOrVariable("SortBags", function()
+  HookAddon("SortBags", function()
     if C.thirdparty.sortbags.enable == "0" then return end
 
     local sort = CreateFrame("Frame", nil)
@@ -828,7 +828,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end)
   end)
 
-  HookAddonOrVariable("FlightMap", function()
+  HookAddon("FlightMap", function()
     if C.thirdparty.flightmap.enable == "0" then return end
 
     FlightMapTimesBorder:Hide()
@@ -844,7 +844,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     FlightMapTimesText:SetFont(pfUI.font_default, 12, "OUTLINE")
   end)
 
-  HookAddonOrVariable("TheoryCraft_SetUpButton", function()
+  HookAddon("TheoryCraft", function()
     if C.thirdparty.theorycraft.enable == "0" then return end
 
     -- set pfUI bar font
@@ -862,12 +862,9 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end
   end)
 
-  HookAddonOrVariable("SM_GetActionSpell", function()
+  HookAddon("SuperMacro", function()
     if C.thirdparty.supermacro.enable == "0" then return end
     if not pfUI.bars then return end
-
-    -- skin game menu button
-    SkinButton(GameMenuButtonSuperMacro)
 
     -- hook events to include SuperMacro refreshs
     local ButtonFullUpdate = pfUI.bars.ButtonFullUpdate
@@ -888,18 +885,15 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end
 
     -- hook events to include SuperMacro refreshs
-    local ButtonEnter = pfUI.bars[1][1]:GetScript("OnEnter")
     local function NewButtonEnter()
-      ButtonEnter()
-      local actionid = ActionButton_GetPagedID(this)
-      SM_ActionButton_SetTooltip(actionid)
+      SM_ActionButton_SetTooltip(ActionButton_GetPagedID(this))
     end
 
     -- reassign the new event handler
     for i=1,10 do
       for j=1,12 do
         pfUI.bars[i][j]:SetScript("OnEvent", NewButtonEvent)
-        pfUI.bars[i][j]:SetScript("OnEnter", NewButtonEnter)
+        pfUI.bars[i][j]:HookScript("OnEnter", NewButtonEnter)
       end
     end
 
@@ -911,7 +905,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
 
   -- CleverMacro
   -- https://github.com/DanielAdolfsson/CleverMacro
-  HookAddonOrVariable("CleverMacro", function()
+  HookAddon("CleverMacro", function()
     if C.thirdparty.clevermacro.enable == "0" then return end
 
     -- get pfUI actionbar event handler
@@ -928,7 +922,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
   end)
 
   -- SuperCleveRoidMacros
-  HookAddonOrVariable("SuperCleveRoidMacros", function()
+  HookAddon("SuperCleveRoidMacros", function()
     if C.thirdparty.supercleveroidmacros.enable == "0" then return end
     if not pfUI.bars then return end
 
@@ -936,22 +930,22 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     pfUI.bars.skip_macro = true
   end)
 
-  HookAddonOrVariable("AtlasLoot", function()
+  HookAddon("AtlasLoot", function()
     if C.thirdparty.atlasloot.enable == "0" then return end
 
     CreateBackdrop(AtlasLootTooltip)
     CreateBackdropShadow(AtlasLootTooltip)
 
     if pfUI.eqcompare then
-      HookScript(AtlasLootTooltip, "OnShow", pfUI.eqcompare.GameTooltipShow)
-      HookScript(AtlasLootTooltip, "OnHide", function()
+      pfUI.eqcompare.HookTooltip(AtlasLootTooltip)
+      AtlasLootTooltip:HookScript("OnHide", function()
         ShoppingTooltip1:Hide()
         ShoppingTooltip2:Hide()
       end)
     end
   end)
 
-  HookAddonOrVariable("crafty", function()
+  HookAddon("crafty", function()
     if C.thirdparty.crafty.enable == "0" then return end
 
     local craftyskin = CreateFrame("Frame", nil, UIParent)
@@ -1014,7 +1008,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end)
   end)
 
-  HookAddonOrVariable("BetterCharacterStats", function()
+  HookAddon("BetterCharacterStats", function()
     if C.thirdparty.bcs.enable == "0" then return end
     StripTextures(BetterCharacterAttributesFrame)
 
@@ -1031,7 +1025,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     end
   end)
 
-  HookAddonOrVariable("MyRolePlay", function()
+  HookAddon("MyRolePlay", function()
     if C.thirdparty.myroleplay.enable == "0" then return end
 
     if pfUI.uf.target then
@@ -1048,15 +1042,13 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
 
     if pfUI.uf.player then
       -- set tooltip function for player frame
-      local oldfunc = pfUI.uf.player:GetScript("OnEnter")
-      pfUI.uf.player:SetScript("OnEnter", function()
-        oldfunc()
+      pfUI.uf.player:HookScript("OnEnter", function()
         mrpDisplayTooltip("player", "PLAYER")
       end)
     end
   end)
 
-  HookAddonOrVariable("DruidManaBarBackground", function()
+  HookAddon("DruidManaBarBackground", function()
     if C.thirdparty.druidmana.enable == "0" then return end
     DruidManaBar:SetParent(UIParent)
     DruidManaBar.bd:Hide()
@@ -1085,7 +1077,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
     UpdateMovable(DruidManaBar)
   end)
 
-  HookAddonOrVariable("NoteIt", function()
+  HookAddon("NoteIt", function()
     if C.thirdparty.noteit.enable == "0" then return end
 
     -- Main window
@@ -1175,42 +1167,21 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
   end)
 
   local EnableHealComm = function()
-    -- hook healcomm's addon message to parse single-player events
+    -- HealComm-1.0 already broadcasts this player's casts: keep libpredict
+    -- tracking them, but stop it sending a second copy
     if AceLibrary and AceLibrary:HasInstance("HealComm-1.0") and pfUI.api.libpredict then
-      local HealComm = AceLibrary("HealComm-1.0")
-
-      -- use pfUI frames to draw healComm predictions
-      local pfHookHealCommSendAddonMessage = HealComm.SendAddonMessage
-      function HealComm.SendAddonMessage(this, msg)
-        if not UnitInRaid("player") and GetNumPartyMembers() < 1 then
-          libpredict:ParseChatMessage(UnitName("player"), msg, "HealComm")
-        end
-        pfHookHealCommSendAddonMessage(this, msg)
-      end
-
-      -- disable pfUI predictions
-      pfUI.api.libpredict.sender:UnregisterAllEvents()
       pfUI.api.libpredict.sender.enabled = nil
     end
   end
-  HookAddonOrVariable("HealComm", EnableHealComm)
-  HookAddonOrVariable("LunaUnitFrames", EnableHealComm)
-  HookAddonOrVariable("NotGrid", EnableHealComm)
+  HookAddon("HealComm", EnableHealComm)
+  HookAddon("LunaUnitFrames", EnableHealComm)
+  HookAddon("NotGrid", EnableHealComm)
 
-  HookAddonOrVariable("MoveAnything", function()
-    SkinButton(GameMenuButtonMoveAnything)
-  end)
-
-  HookAddonOrVariable("MCP", function()
-    SkinButton(GameMenuButtonAddOns)
-  end)
-
-  HookAddonOrVariable("HardcoreDeath", function()
-    SkinButton(GameMenuButtonHardcoreDeathLogGUI)
+  HookAddon("HardcoreDeath", function()
     GameMenuFrame:SetHeight(GameMenuFrame:GetHeight() + 20)
   end)
 
-  HookAddonOrVariable("MacroExtender", function()
+  HookAddon("MacroExtender", function()
     -- Macro Extender moves the character dialog from frame-stata "dialog"
     -- to "low" and by that moves the frame below backgrounds, quest-trackers,
     -- and what not... it does this because the buttons it attempts to add, are
@@ -1232,7 +1203,7 @@ pfUI:RegisterModule("thirdparty-vanilla", "vanilla", function()
 
   -- UnitXP SP3 compatibility
   -- https://github.com/allfoxwy/UnitXP_SP3
-  HookAddonOrVariable("UnitXP_SP3_Addon", function()
+  HookAddon("UnitXP_SP3_Addon", function()
     -- skin UnitXP SP3 window and elements
     StripTextures(xpsp3Frame)
     CreateBackdrop(xpsp3Frame)

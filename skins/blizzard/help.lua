@@ -1,18 +1,6 @@
-pfUI:RegisterSkin("Help", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Help", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
-
-  -- not much here for tbc yet
-  if pfUI.client > 11200 then
-    local ticket, background = TicketStatusFrame:GetChildren()
-    CreateBackdrop(background, nil, true, .75)
-    TicketStatusFrame:SetHeight(40)
-    TicketStatusFrame:ClearAllPoints()
-    TicketStatusFrame:SetPoint("TOP", 0, -5)
-
-    UpdateMovable(TicketStatusFrame)
-    return
-  end
 
   StripTextures(HelpFrame)
   CreateBackdrop(HelpFrame, nil, nil, .75)
@@ -32,8 +20,8 @@ pfUI:RegisterSkin("Help", "vanilla:tbc", function ()
   -- HelpFrameHome
   StripTextures(HelpFrameHomeIssues)
   SkinButton(HelpFrameHomeIssues)
-  HelpFrameHomeIssues:SetScript("OnMouseUp", function() end)
-  HelpFrameHomeIssues:SetScript("OnMouseDown", function() end)
+  HelpFrameHomeIssues:SetScript("OnMouseUp", nop)
+  HelpFrameHomeIssues:SetScript("OnMouseDown", nop)
 
   SkinButton(HelpFrameHomeCancel)
 
@@ -61,13 +49,13 @@ pfUI:RegisterSkin("Help", "vanilla:tbc", function ()
   -- HelpFrameGeneral
   StripTextures(HelpFrameGeneralButton)
   SkinButton(HelpFrameGeneralButton)
-  HelpFrameGeneralButton:SetScript("OnMouseUp", function() end)
-  HelpFrameGeneralButton:SetScript("OnMouseDown", function() end)
+  HelpFrameGeneralButton:SetScript("OnMouseUp", nop)
+  HelpFrameGeneralButton:SetScript("OnMouseDown", nop)
 
   StripTextures(HelpFrameGeneralButton2)
   SkinButton(HelpFrameGeneralButton2)
-  HelpFrameGeneralButton2:SetScript("OnMouseUp", function() end)
-  HelpFrameGeneralButton2:SetScript("OnMouseDown", function() end)
+  HelpFrameGeneralButton2:SetScript("OnMouseUp", nop)
+  HelpFrameGeneralButton2:SetScript("OnMouseDown", nop)
 
   SkinButton(HelpFrameGeneralCancel)
 
@@ -81,13 +69,13 @@ pfUI:RegisterSkin("Help", "vanilla:tbc", function ()
 
   StripTextures(HelpFrameVerbalHarassmentButton)
   SkinButton(HelpFrameVerbalHarassmentButton)
-  HelpFrameVerbalHarassmentButton:SetScript("OnMouseUp", function() end)
-  HelpFrameVerbalHarassmentButton:SetScript("OnMouseDown", function() end)
+  HelpFrameVerbalHarassmentButton:SetScript("OnMouseUp", nop)
+  HelpFrameVerbalHarassmentButton:SetScript("OnMouseDown", nop)
 
   StripTextures(HelpFramePhysicalHarassmentButton)
   SkinButton(HelpFramePhysicalHarassmentButton)
-  HelpFramePhysicalHarassmentButton:SetScript("OnMouseUp", function() end)
-  HelpFramePhysicalHarassmentButton:SetScript("OnMouseDown", function() end)
+  HelpFramePhysicalHarassmentButton:SetScript("OnMouseUp", nop)
+  HelpFramePhysicalHarassmentButton:SetScript("OnMouseDown", nop)
 
   SkinButton(HelpFrameHarassmentCancel)
 

@@ -1,5 +1,5 @@
-pfUI:RegisterModule("gui", "vanilla:tbc", function ()
-  local Reload, U, CreateConfig, CreateTabFrame, CreateArea, CreateGUIEntry, EntryUpdate
+pfUI:RegisterModule("gui", function ()
+  local Reload, U, CreateConfig, CreateTabFrame, CreateArea, CreateGUIEntry, EntryOnEnter, EntryOnLeave
 
   -- "searchDB" gets populated when CreateConfig is called. The table holds
   -- information about the title, its parent buttons and the frame itself:
@@ -47,30 +47,15 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       end
     end})
 
-    function EntryUpdate()
-      -- detect and skip during dropdowns
-      local focus = GetMouseFocus()
-      if focus and focus.parent and focus.parent.menu then
-        if this.over then
-          this.tex:Hide()
-          this.over = nil
-        end
-        return
-      end
-
-      if MouseIsOver(this) and not this.over then
-        this.tex:Show()
-        this.over = true
-      elseif not MouseIsOver(this) and this.over then
-        this.tex:Hide()
-        this.over = nil
-      end
+    function EntryOnEnter()
+      this.tex:Show()
     end
 
-    function CreateConfig(ufunc, caption, category, config, widget, values, skip, named, type, expansion)
-      local disabled = expansion and not strfind(expansion, pfUI.expansion)
-      if disabled and pfUI_config.gui.showdisabled == "0" then return end
+    function EntryOnLeave()
+      this.tex:Hide()
+    end
 
+    function CreateConfig(ufunc, caption, category, config, widget, values, skip, named, type)
       -- this object placement
       if this.objectCount == nil then
         this.objectCount = 0
@@ -118,9 +103,13 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       if not widget or (widget and widget ~= "button") then
 
         if widget ~= "header" then
-          frame:SetScript("OnUpdate", EntryUpdate)
+          -- light up while the cursor is over the row; its widgets pass
+          -- their mouse motion on to it below
+          frame:SetMouseMotionEnabled(true)
+          frame:SetScript("OnEnter", EntryOnEnter)
+          frame:SetScript("OnLeave", EntryOnLeave)
           frame.tex = frame:CreateTexture(nil, "BACKGROUND")
-          frame.tex:SetTexture(1,1,1,.05)
+          frame.tex:SetColorTexture(1,1,1,.05)
           frame.tex:SetAllPoints()
           frame.tex:Hide()
         end
@@ -135,15 +124,6 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         frame.caption:SetPoint("LEFT", frame, "LEFT", 3, 1)
         frame.caption:SetJustifyH("LEFT")
         frame.caption:SetText(caption)
-      end
-
-      if disabled then
-        if frame.caption then
-          frame.caption:SetText(caption .. " |cffff5555[" .. T["Only"] .. " " .. string.gsub(expansion, ":", "&") .. "]")
-        end
-
-        frame:SetAlpha(.5)
-        return
       end
 
       if category == "CVAR" then
@@ -194,14 +174,14 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         frame.color:SetHeight(12)
         CreateBackdrop(frame.color)
         frame.color:SetPoint("RIGHT" , -5, 1)
-        frame.color.prev = frame.color.backdrop:CreateTexture("OVERLAY")
+        frame.color.prev = frame.color.backdrop:CreateTexture(nil, "OVERLAY")
         frame.color.prev:SetAllPoints(frame.color)
 
         local cr, cg, cb, ca = strsplit(",", category[config])
         if not cr or not cg or not cb or not ca then
           cr, cg, cb, ca = 1, 1, 1, 1
         end
-        frame.color.prev:SetTexture(cr,cg,cb,ca)
+        frame.color.prev:SetColorTexture(cr,cg,cb,ca)
 
         frame.color:SetScript("OnClick", function()
           local cr, cg, cb, ca = strsplit(",", category[config])
@@ -219,16 +199,17 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
             b = round(b, 3)
             a = round(a, 3)
 
-            preview:SetTexture(r,g,b,a)
+            preview:SetColorTexture(r,g,b,a)
 
             if not this:GetParent():IsShown() then
               category[config] = r .. "," .. g .. "," .. b .. "," .. a
               if ufunc then ufunc() else pfUI.gui.settingChanged = true end
+              pfUI.events:TriggerEvent("config:changed", category, config)
             end
           end
 
           function ColorPickerFrame.cancelFunc()
-            preview:SetTexture(cr,cg,cb,ca)
+            preview:SetColorTexture(cr,cg,cb,ca)
           end
 
           ColorPickerFrame.opacityFunc = ColorPickerFrame.func
@@ -290,6 +271,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
             if this:GetText() ~= this:GetParent().category[this:GetParent().config] then
               this:GetParent().category[this:GetParent().config] = this:GetText()
               if ufunc then ufunc() else pfUI.gui.settingChanged = true end
+              pfUI.events:TriggerEvent("config:changed", category, config)
             end
             this:SetTextColor(.2,1,.8,1)
           else
@@ -340,6 +322,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
           end
 
           if ufunc then ufunc() else pfUI.gui.settingChanged = true end
+          pfUI.events:TriggerEvent("config:changed", category, config)
         end)
 
         if category[config] == "1" then frame.input:SetChecked() end
@@ -352,44 +335,43 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
       -- use dropdown widget
       if widget == "dropdown" and values then
-        frame.input = CreateDropDownButton(nil, frame)
-        frame.input:SetBackdrop(nil)
-        frame.input.menuframe:SetParent(pfUI.gui)
+        local function IsSelected(value)
+          return category[config] == value
+        end
 
+        local function SetSelected(value)
+          if category[config] ~= value then
+            category[config] = value
+            if ufunc then ufunc() else pfUI.gui.settingChanged = true end
+            pfUI.events:TriggerEvent("config:changed", category, config)
+          end
+        end
+
+        frame.input = CreateFrame("DropdownButton", nil, frame, "pfUIDropdownTemplate")
         frame.input:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
         frame.input:SetWidth(180)
-        frame.input:SetMenu(function()
-          local menu = {}
-
-          for i, k in pairs(_G.type(values) == "function" and values() or values) do
-            local entry = {}
+        frame.input:SetupMenu(function(dropdown, rootDescription)
+          for _, k in pairs(_G.type(values) == "function" and values() or values) do
             -- get human readable
             local value, text = strsplit(":", k)
-            text = text or value
-
-            entry.text = text
-            entry.func = function()
-              if category and category[config] ~= value then
-                category[config] = value
-                if ufunc then ufunc() else pfUI.gui.settingChanged = true end
-              end
-            end
-
-            if category and category[config] == value then
-              frame.input.current = i
-            end
-
-            table.insert(menu, entry)
+            rootDescription:CreateRadio(text or value, IsSelected, SetSelected, value)
           end
-
-          return menu
         end)
-
-        frame.input:SetSelection(frame.input.current)
       end
 
       -- use list widget
       if widget == "list" then
+        -- index of the selected entry among the "#" separated ones
+        local selected
+
+        local function IsSelected(index)
+          return index == selected
+        end
+
+        local function Select(index)
+          selected = index
+        end
+
         frame.del = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
         SkinButton(frame.del)
         frame.del:SetWidth(16)
@@ -399,14 +381,16 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         frame.del:SetText("-")
         frame.del:SetTextColor(1,.5,.5,1)
         frame.del:SetScript("OnClick", function()
-          local sel = frame.input:GetSelection()
+          if not selected then return end
           local newconf = ""
-          for id, val in pairs({strsplit("#", category[config])}) do
-            if id ~= sel then newconf = newconf .. "#" .. val end
+          for id, val in ipairs({strsplit("#", category[config])}) do
+            if id ~= selected and val ~= "" then newconf = newconf .. "#" .. val end
           end
+          selected = nil
           category[config] = newconf
           if ufunc then ufunc() else pfUI.gui.settingChanged = true end
-          frame.input:UpdateMenu()
+          pfUI.events:TriggerEvent("config:changed", category, config)
+          frame.input:GenerateMenu()
         end)
 
         frame.add = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -421,22 +405,25 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
           CreateQuestionDialog(T["New entry:"], function()
             category[config] = category[config] .. "#" .. this:GetParent().input:GetText()
             if ufunc then ufunc() else pfUI.gui.settingChanged = true end
-            frame.input:UpdateMenu()
+            pfUI.events:TriggerEvent("config:changed", category, config)
+            frame.input:GenerateMenu()
           end, false, true)
         end)
 
-        frame.input = CreateDropDownButton(nil, frame)
-        frame.input:SetBackdrop(nil)
-        frame.input.menuframe:SetParent(pfUI.gui)
+        frame.input = CreateFrame("DropdownButton", nil, frame, "pfUIDropdownTemplate")
         frame.input:SetPoint("RIGHT", frame.add, "LEFT", -2, 0)
         frame.input:SetWidth(140)
-        frame.input:SetMenu(function()
-          local menu = {}
-          for i, val in pairs({strsplit("#", category[config])}) do
-            table.insert(menu, { text = val })
+        frame.input:SetupMenu(function(dropdown, rootDescription)
+          for id, val in ipairs({strsplit("#", category[config])}) do
+            if val ~= "" then
+              rootDescription:CreateRadio(val, IsSelected, Select, id)
+            end
           end
-          return menu
         end)
+      end
+
+      for _, child in ipairs({ frame:GetChildren() }) do
+        child:SetPropagateMouseMotion(true)
       end
 
       return frame
@@ -503,31 +490,32 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       f.button = parent[title]
 
       f.bg = f:CreateTexture(nil, "BACKGROUND")
-      f.bg:SetTexture(1,1,1,.05)
+      f.bg:SetColorTexture(1,1,1,.05)
       f.bg:SetAllPoints()
 
       f:SetScript("OnShow", function()
         this.indexed = true
         this.button.text:SetTextColor(.2,1,.8,1)
-        this.button.bg:SetTexture(1,1,1,1)
+        this.button.bg:SetColorTexture(1,1,1,1)
         this.button.bg:SetGradientAlpha("HORIZONTAL", 0,0,0,0,  1,1,1,.05)
       end)
 
       f:SetScript("OnHide", function()
         this.button.text:SetTextColor(1,1,1,1)
-        this.button.bg:SetTexture(0,0,0,0)
+        this.button.bg:SetColorTexture(0,0,0,0)
       end)
 
       -- are we a frame with contents?
       if func then
-        f.scroll = CreateScrollFrame(nil, f)
+        f.scroll = CreateFrame("ScrollFrame", nil, f, "pfUIScrollFrameTemplate")
         SetAllPointsOffset(f.scroll, f, 2)
-        f.scroll.content = CreateScrollChild(nil, f.scroll)
+        f.scroll.content = f.scroll.Content
         f.scroll.content.parent = f.scroll
         f.scroll.content:SetScript("OnShow", function()
           if not this.setup then
             func()
             this.setup = true
+            this.parent:UpdateScrollChildRect()
           end
         end)
       end
@@ -700,7 +688,10 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
     SkinButton(pfUI.gui.share)
 
     -- searchbar
-    local function SearchEntryClick()
+    local results     -- the result list, made with the search page on the first search
+    local highlighted -- the config row the last clicked result points at
+
+    local function SearchResultClick()
       -- clear search focus
       pfUI.gui.search:ClearFocus()
 
@@ -710,35 +701,44 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       end
 
       -- highlight matched entry
-      if not this.obj[-1].highlight then
-        this.obj[-1].highlight = this.obj[-1]:CreateTexture(nil, "OVERLAY")
-        this.obj[-1].highlight:SetAllPoints()
-        this.obj[-1].highlight:SetTexture(.2,1,.8,.2)
+      if highlighted then highlighted.highlight:Hide() end
+      highlighted = this.obj[-1]
+      if not highlighted.highlight then
+        highlighted.highlight = highlighted:CreateTexture(nil, "OVERLAY")
+        highlighted.highlight:SetAllPoints()
+        highlighted.highlight:SetColorTexture(.2,1,.8,.2)
       end
-      this.obj[-1].highlight:Show()
+      highlighted.highlight:Show()
     end
 
-    local function CreateSearchEntry(parent, i)
-      local f = CreateFrame("Button", nil, parent)
-      f:SetPoint("TOPLEFT", 5, -5 + (i-1)*-25)
-      f:SetWidth(565)
-      f:SetHeight(20)
-      f:SetScript("OnClick", SearchEntryClick)
-      f:SetScript("OnUpdate", EntryUpdate)
+    local function InitSearchResult(f, obj)
+      -- one-time setup of a pooled row
+      if not f.text then
+        f:SetScript("OnClick", SearchResultClick)
+        f:SetScript("OnEnter", EntryOnEnter)
+        f:SetScript("OnLeave", EntryOnLeave)
 
-      f.text = f:CreateFontString("Status", "LOW", "GameFontWhite")
-      f.text:SetFont(pfUI.font_default, pfUI_config.global.font_size, "OUTLINE")
-      f.text:SetAllPoints()
-      f.text:SetJustifyH("LEFT")
-      f.text:SetJustifyV("CENTER")
-      f.text:SetTextColor(.5,.5,.5)
+        f.text = f:CreateFontString(nil, "LOW", "GameFontWhite")
+        f.text:SetFont(pfUI.font_default, pfUI_config.global.font_size, "OUTLINE")
+        f.text:SetAllPoints()
+        f.text:SetJustifyH("LEFT")
+        f.text:SetJustifyV("CENTER")
+        f.text:SetTextColor(.5,.5,.5)
 
-      f.tex = f:CreateTexture(nil, "BACKGROUND")
-      f.tex:SetTexture(1,1,1,.05)
-      f.tex:SetAllPoints()
-      f.tex:Hide()
+        f.tex = f:CreateTexture(nil, "BACKGROUND")
+        f.tex:SetColorTexture(1,1,1,.05)
+        f.tex:SetAllPoints()
+        f.tex:Hide()
+      end
 
-      return f
+      f.obj = obj
+
+      -- the path of submenus, then the entry
+      local caption = ""
+      for x=table.getn(obj),1,-1 do
+        caption = caption .. "|cff33ffcc" .. obj[x].text:GetText() .. "|r » "
+      end
+      f.text:SetText(caption .. "|cffffffff" .. obj[0])
     end
 
     pfUI.gui.search = CreateFrame("EditBox", nil, pfUI.gui)
@@ -765,54 +765,34 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       local defval = "["..T["Search"].."]"
 
       -- initialize search window
-      CreateGUIEntry(defval, nil, function() end)
+      if not results then
+        CreateGUIEntry(defval)
+        results = CreateFrame("Frame", nil, pfUI.gui.frames[defval].area, "pfUIScrollBoxListTemplate")
+        SetAllPointsOffset(results, pfUI.gui.frames[defval].area, 2)
+
+        local view = CreateScrollBoxListLinearView(0, 0, 0, 0, 5)
+        view:SetElementExtent(20)
+        view:SetElementInitializer("Button", InitSearchResult)
+        ScrollUtil.InitScrollBoxListWithScrollBar(results.ScrollBox, results.ScrollBar, view)
+      end
       pfUI.gui.frames[defval]:Click()
 
-      local scroll = pfUI.gui.frames[defval].area.scroll.content
-      local parent = pfUI.gui.frames[defval].area.scroll
-      scroll.results = scroll.results or {}
-
-      for i=1,table.getn(scroll.results) do
-        scroll.results[i]:Hide()
-        if scroll.results[i].obj and scroll.results[i].obj[-1].highlight then
-          scroll.results[i].obj[-1].highlight:Hide()
-        end
+      if highlighted then
+        highlighted.highlight:Hide()
+        highlighted = nil
       end
 
-      if strlen(this:GetText()) < 1 then return end
-
-      local i = 1
+      -- the matching entries, from the top of the list
+      local matches = {}
       local search = strlower(this:GetText())
-      for name, obj in pairs(searchDB) do
-        local title = obj[0] and strlower(obj[0])
-        if strfind(title, search) then
-          -- build caption string
-          local caption = ""
-          for x=table.getn(obj),1,-1 do
-            caption = caption .. "|cff33ffcc" .. obj[x].text:GetText() .. "|r » "
+      if search ~= "" then
+        for _, obj in pairs(searchDB) do
+          if strfind(strlower(obj[0]), search, 1, true) then
+            table.insert(matches, obj)
           end
-          caption = caption .. "|cffffffff" .. obj[0]
-
-          -- build search entry button
-          scroll.results[i] = scroll.results[i] or CreateSearchEntry(scroll, i)
-          scroll.results[i].obj = obj
-          scroll.results[i].text:SetText(caption)
-          scroll.results[i]:Show()
-
-          i = i + 1
         end
       end
-
-      -- reload scroll frames
-      scroll:Hide()
-      scroll:SetHeight(i * 25 )
-      scroll:Show()
-      parent:SetScrollChild(scroll)
-      QueueFunction(function()
-        parent:SetVerticalScroll(0)
-        parent:UpdateScrollState()
-        parent:Scroll()
-      end)
+      results.ScrollBox:SetDataProvider(CreateDataProvider(matches))
     end)
 
     pfUI.gui.search:SetScript("OnEditFocusGained", function(self)
@@ -918,17 +898,14 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         "1:" .. T["1 Decimal (2.1)"],
         "2:" .. T["2 Decimals (2.14)"],
       },
+      ["castbaralign"] = {
+        "LEFT:" .. T["Left"],
+        "CENTER:" .. T["Center"],
+        "RIGHT:" .. T["Right"],
+      },
       ["orientation"] = {
         "HORIZONTAL:" .. T["Horizontal"],
         "VERTICAL:" .. T["Vertical"],
-      },
-      ["uf_animationspeed"] = {
-        "1:" .. T["Instant"],
-        "2:" .. T["Very Fast"],
-        "3:" .. T["Fast"],
-        "5:" .. T["Medium"],
-        "8:" .. T["Slow"],
-        "13:" .. T["Very Slow"],
       },
       ["xpanchors"] = {
         "__NONONIL__:" .. T["No Anchor"],
@@ -962,7 +939,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         "16:" .. T["Very Slow"],
       },
       ["uf_rangecheck_mode"] = {
-        "vanilla:" .. T["Vanilla (Spellbook)"],
+        "vanilla:" .. T["ClassicAPI (UnitInRange)"],
         "unitxp:" .. T["UnitXP (Precise)"],
       },
       ["uf_raidlayout"] = {
@@ -984,6 +961,12 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         "TOPLEFT:" .. T["Left"],
         "TOP:" .. T["Center"],
         "TOPRIGHT:" .. T["Right"]
+      },
+      ["uf_portrait_style"] = {
+        "3d:" .. T["3D"],
+        "2d:" .. T["2D"],
+        "classround:" .. T["Class Icon (Round)"],
+        "classsquare:" .. T["Class Icon (Square)"]
       },
       ["uf_portrait_position"] = {
         "bar:" .. T["Healthbar Embedded"],
@@ -1074,6 +1057,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         "unitrev:" .. T["Unit String (Reverse)"],
         "name:" .. T["Name"],
         "nameshort:" .. T["Name (Short)"],
+        "ownername:" .. T["Owner Name"],
         "level:" .. T["Level"],
         "class:" .. T["Class"],
         "namehealth:" .. T["Name | Health Missing"],
@@ -1304,7 +1288,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       -- draw pfUI logo
       local function draw(p, fx, fy, tx, ty, r, g, b, a)
         local t = p:CreateTexture(nil, "OVERLAY")
-        t:SetTexture(r,g,b,a)
+        t:SetColorTexture(r,g,b,a)
         t:SetPoint("TOPLEFT", fx, fy)
         t:SetPoint("BOTTOMRIGHT", p, "TOPLEFT", tx, ty)
       end
@@ -1331,14 +1315,14 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
       this.version = this:CreateFontString("Status", "LOW", "GameFontWhite")
       this.version:SetFont(pfUI.font_default, C.global.font_size)
-      this.version:SetPoint("TOPRIGHT", 375, -170)
+      this.version:SetPoint("TOPRIGHT", this, "TOPLEFT", 375, -170)
       this.version:SetWidth(200)
       this.version:SetJustifyH("RIGHT")
 
       this.update = this:CreateFontString("Status", "LOW", "GameFontWhite")
       this.update:SetFont(pfUI.font_default, C.global.font_size)
       this.update:SetPoint("TOPLEFT", 200, -140)
-      this.update:SetPoint("TOPRIGHT", 375, -140)
+      this.update:SetPoint("TOPRIGHT", this, "TOPLEFT", 375, -140)
       this.update:SetJustifyH("CENTER")
       this.update:SetTextColor(.2,1,.8)
 
@@ -1351,7 +1335,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
       this.screen = this:CreateFontString("Status", "LOW", "GameFontWhite")
       this.screen:SetFont(pfUI.font_default, C.global.font_size)
-      this.screen:SetPoint("TOPRIGHT", 375, -200)
+      this.screen:SetPoint("TOPRIGHT", this, "TOPLEFT", 375, -200)
       this.screen:SetWidth(200)
       this.screen:SetJustifyH("RIGHT")
 
@@ -1364,7 +1348,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
       this.scale = this:CreateFontString("Status", "LOW", "GameFontWhite")
       this.scale:SetFont(pfUI.font_default, C.global.font_size)
-      this.scale:SetPoint("TOPRIGHT", 375, -220)
+      this.scale:SetPoint("TOPRIGHT", this, "TOPLEFT", 375, -220)
       this.scale:SetWidth(200)
       this.scale:SetJustifyH("RIGHT")
 
@@ -1377,7 +1361,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
       this.client = this:CreateFontString("Status", "LOW", "GameFontWhite")
       this.client:SetFont(pfUI.font_default, C.global.font_size)
-      this.client:SetPoint("TOPRIGHT", 375, -250)
+      this.client:SetPoint("TOPRIGHT", this, "TOPLEFT", 375, -250)
       this.client:SetWidth(200)
       this.client:SetJustifyH("RIGHT")
 
@@ -1389,7 +1373,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       this.langc:SetText(T["Language"] .. ":")
       this.lang = this:CreateFontString("Status", "LOW", "GameFontWhite")
       this.lang:SetFont(pfUI.font_default, C.global.font_size)
-      this.lang:SetPoint("TOPRIGHT", 375, -270)
+      this.lang:SetPoint("TOPRIGHT", this, "TOPLEFT", 375, -270)
       this.lang:SetWidth(200)
       this.lang:SetJustifyH("RIGHT")
 
@@ -1418,7 +1402,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       donate:SetHeight(20)
       donate:SetText(T["Donate"])
       donate:SetScript("OnClick", function()
-        pfUI.chat.urlcopy.CopyText("https://buymeacoffee.com/w1ot8abps4")
+        CopyText("https://buymeacoffee.com/brues")
       end)
       SkinButton(donate)
 
@@ -1428,7 +1412,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       github:SetHeight(20)
       github:SetText(T["GitHub"])
       github:SetScript("OnClick", function()
-        pfUI.chat.urlcopy.CopyText("https://github.com/me0wg4ming/pfUI")
+        CopyText(GetAddOnMetadata(pfUI.name, "X-Website"))
       end)
       SkinButton(github)
 
@@ -1438,7 +1422,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       website:SetHeight(20)
       website:SetText(T["Website"])
       website:SetScript("OnClick", function()
-        pfUI.chat.urlcopy.CopyText("https://github.com/me0wg4ming/pfUI")
+        CopyText(GetAddOnMetadata(pfUI.name, "X-Website"))
       end)
       SkinButton(website)
     end)
@@ -1535,7 +1519,6 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Use Single Line UIErrors Frame"], C.global, "errors_limit", "checkbox")
       CreateConfig(nil, T["Disable Errors in UIErrors Frame"], C.global, "errors_hide", "checkbox")
       CreateConfig(nil, T["Highlight Settings That Require Reload"], C.gui, "reloadmarker", "checkbox")
-      CreateConfig(nil, T["Show Incompatible Config Entries"], C.gui, "showdisabled", "checkbox")
       CreateConfig(nil, T["Abbreviate Numbers"], C.unitframes, "abbrevnum", "dropdown", pfUI.gui.dropdowns.abbrevnum)
       CreateConfig(nil, T["Castbar Timer Decimals Maximum"], C.unitframes, "castbardecimals", "dropdown", pfUI.gui.dropdowns.castbardecimals)
       CreateConfig(nil, T["Castbar Timer Decimals Progress"], C.unitframes, "castbardecimalscur", "dropdown", pfUI.gui.dropdowns.castbardecimals)
@@ -1620,21 +1603,51 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
     end)
 
     CreateGUIEntry(T["Settings"], T["Cooldown"], function()
-      CreateConfig(U["buff"], T["Show Milliseconds When Timer Runs Out"], C.appearance.cd, "milliseconds", "checkbox")
-      CreateConfig(nil, T["Cooldown Color (Less than 3 Sec)"], C.appearance.cd, "lowcolor", "color")
-      CreateConfig(nil, T["Cooldown Color (Seconds)"], C.appearance.cd, "normalcolor", "color")
-      CreateConfig(nil, T["Cooldown Color (Minutes)"], C.appearance.cd, "minutecolor", "color")
-      CreateConfig(nil, T["Cooldown Color (Hours)"], C.appearance.cd, "hourcolor", "color")
-      CreateConfig(nil, T["Cooldown Color (Days)"], C.appearance.cd, "daycolor", "color")
-      CreateConfig(nil, T["Use Dynamic Font Size"], C.appearance.cd, "dynamicsize", "checkbox")
-      CreateConfig(nil, T["Cooldown Text Font"], C.appearance.cd, "font", "dropdown", pfUI.gui.dropdowns.fonts)
-      CreateConfig(nil, T["Cooldown Text Font Size"], C.appearance.cd, "font_size")
-      CreateConfig(nil, T["Cooldown Text Font Size (Blizzard Frames)"], C.appearance.cd, "font_size_blizz")
-      CreateConfig(nil, T["Cooldown Text Font Size (Foreign Frames)"], C.appearance.cd, "font_size_foreign")
-      CreateConfig(nil, T["Cooldown Text Time Threshold"], C.appearance.cd, "threshold")
-      CreateConfig(nil, T["Enable Durations On Blizzard Frames"], C.appearance.cd, "blizzard", "checkbox")
-      CreateConfig(nil, T["Enable Durations On Foreign Frames"], C.appearance.cd, "foreign", "checkbox")
-      CreateConfig(nil, T["Hide Foreign Cooldown Animations"], C.appearance.cd, "hideanim", "checkbox")
+      -- every kind of cooldown CreateCooldown makes, as C.cooldown groups.
+      -- Other addons' cooldowns only lose numbers or sweep (see
+      -- api/cooldown.lua), so giving them back takes a reload
+      local kinds = {
+        { "actionbar", T["Action Bars"] },
+        { "bags", T["Bags"] },
+        { "blizzard", T["Spellbook And Character"] },
+        { "unitframe", T["Unit Frame Auras"] },
+        { "indicator", T["Buff Indicators"] },
+        { "nameplate", T["Nameplate Debuffs"] },
+        { "buff", T["Player Buffs"] },
+        { "tooltip", T["Tooltip Auras"] },
+        { "totem", T["Totems"] },
+        { "lossofcontrol", T["Loss Of Control"] },
+        { "foreign", T["Other Addons"] },
+      }
+
+      CreateConfig(nil, COUNTDOWN_FOR_COOLDOWNS_TEXT, "CVAR", "countdownForCooldowns", "checkbox")
+      CreateConfig(UpdateCooldowns, T["Font"], C.cooldown, "font", "dropdown", pfUI.gui.dropdowns.fonts)
+      CreateConfig(nil, T["Font Size"], C.cooldown, "font_size")
+      CreateConfig(nil, T["Scale Font Size With Icon"], C.cooldown, "dynamicsize", "checkbox")
+      CreateConfig(UpdateCooldowns, T["Hide Numbers On Spell Cooldowns Up To (Seconds)"], C.cooldown, "threshold")
+      CreateConfig(UpdateCooldowns, T["Show Tenths Below 5 Seconds"], C.cooldown, "milliseconds", "checkbox")
+      CreateConfig(UpdateCooldowns, T["Cooldown Color (5 Seconds Or Less)"], C.cooldown, "lowcolor", "color")
+      CreateConfig(UpdateCooldowns, T["Cooldown Color (Seconds)"], C.cooldown, "normalcolor", "color")
+      CreateConfig(UpdateCooldowns, T["Cooldown Color (Minutes)"], C.cooldown, "minutecolor", "color")
+      CreateConfig(UpdateCooldowns, T["Cooldown Color (Hours)"], C.cooldown, "hourcolor", "color")
+      CreateConfig(UpdateCooldowns, T["Cooldown Color (Days)"], C.cooldown, "daycolor", "color")
+
+      CreateConfig(nil, T["Show Numbers On"], nil, nil, "header")
+      for _, kind in ipairs(kinds) do
+        CreateConfig(kind[1] ~= "foreign" and UpdateCooldowns or nil, kind[2], C.cooldown[kind[1]], "text", "checkbox")
+      end
+
+      CreateConfig(nil, T["Show Sweep On"], nil, nil, "header")
+      for _, kind in ipairs(kinds) do
+        CreateConfig(kind[1] ~= "foreign" and UpdateCooldowns or nil, kind[2], C.cooldown[kind[1]], "animation", "checkbox")
+      end
+
+      CreateConfig(nil, T["Reverse Sweep On"], nil, nil, "header")
+      for _, kind in ipairs(kinds) do
+        if kind[1] ~= "foreign" then
+          CreateConfig(UpdateCooldowns, kind[2], C.cooldown[kind[1]], "reverse", "checkbox")
+        end
+      end
     end)
 
     CreateGUIEntry(T["Settings"], T["Screenshot"], function()
@@ -2071,17 +2084,14 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
     CreateGUIEntry(T["Unit Frames"], T["General"], function()
       CreateConfig(nil, T["Disable pfUI Unit Frames"], C.unitframes, "disable", "checkbox")
-      CreateConfig(nil, T["Healthbar Animation Speed"], C.unitframes, "animation_speed", "dropdown", pfUI.gui.dropdowns.uf_animationspeed)
+      CreateConfig(nil, T["Animate Health And Power Bars"], C.unitframes, "animatebars", "checkbox")
       CreateConfig(nil, T["Portrait Alpha"], C.unitframes, "portraitalpha")
-      CreateConfig(nil, T["Always Use 2D Portraits"], C.unitframes, "always2dportrait", "checkbox")
+      CreateConfig(nil, T["Portrait Style"], C.unitframes, "portraitstyle", "dropdown", pfUI.gui.dropdowns.uf_portrait_style)
       CreateConfig(nil, T["Enable 2D Portraits As Fallback"], C.unitframes, "portraittexture", "checkbox")
       CreateConfig(nil, T["Unit Frame Layout"], C.unitframes, "layout", "dropdown", pfUI.gui.dropdowns.uf_layout)
       CreateConfig(nil, T["Combopoint Width"], C.unitframes, "combowidth")
       CreateConfig(nil, T["Combopoint Height"], C.unitframes, "comboheight")
       CreateConfig(nil, T["Show Resting"], C.unitframes.player, "showRest", "checkbox")
-      CreateConfig(nil, T["Enable Energy Ticks"], C.unitframes.player, "energy", "checkbox")
-      CreateConfig(nil, T["Enable Mana Ticks"], C.unitframes.player, "manatick", "checkbox")
-      CreateConfig(nil, T["Detect Enemy Buffs"], C.unitframes, "buffdetect", "checkbox", nil, nil, nil, nil, "vanilla" )
       CreateConfig(nil, T["Raid Mark Icon Style"], C.unitframes, "blizzard_raidicons", "dropdown", function() return {"1:Original Blizzard", "0:pfUI Design"} end)
 
       CreateConfig(nil, T["Swing Timer"], nil, nil, "header")
@@ -2097,6 +2107,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Offhand Bar Color"], C.unitframes, "swingtimerohcolor", "color")
       CreateConfig(nil, T["Ranged Bar Color"], C.unitframes, "swingtimerrangedcolor", "color")
       CreateConfig(nil, T["Ranged Warn Color (Hunter)"], C.unitframes, "swingtimerrangedwarncolor", "color")
+      CreateConfig(nil, T["Out Of Range Color"], C.unitframes, "swingtimeroutrangecolor", "color")
       CreateConfig(nil, T["Show On Next Attack Queue Color"], C.unitframes, "swingtimerhsqueue", "checkbox")
       CreateConfig(nil, T["Show Attack Speed"], C.unitframes, "swingtimerattackspeed", "checkbox")
 
@@ -2125,13 +2136,12 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Unit Frame short Name length"], C.global, "font_unit_name_length")
 
       CreateConfig(U[c], T["Group Options"], nil, nil, "header")
-      CreateConfig(nil, T["Enable 40y-Range Check"], C.unitframes, "rangecheck", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Range Check Mode"], C.unitframes, "rangecheck_mode", "dropdown", pfUI.gui.dropdowns.uf_rangecheck_mode, nil, nil, nil, "vanilla")
-      CreateConfig(nil, T["UnitXP Range Threshold (yards)"], C.unitframes, "rangecheck_distance", nil, nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, T["Range Check Interval"], C.unitframes, "rangechecki", "dropdown", pfUI.gui.dropdowns.uf_rangecheckinterval, nil, nil, nil, "vanilla")
-      CreateConfig(nil, T["Use Raid Frames To Display Group Members"], C.unitframes, "raidforgroup", "checkbox")
-      CreateConfig(nil, T["Always Show Self In Raid Frames"], C.unitframes, "selfinraid", "checkbox")
+      CreateConfig(nil, T["Enable 40y-Range Check"], C.unitframes, "rangecheck", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Range Check Mode"], C.unitframes, "rangecheck_mode", "dropdown", pfUI.gui.dropdowns.uf_rangecheck_mode, nil, nil, nil)
+      CreateConfig(nil, T["UnitXP Range Threshold (yards)"], C.unitframes, "rangecheck_distance", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Show Self In Raid Frames When Solo"], C.unitframes, "selfinraid", "checkbox")
       CreateConfig(nil, T["Show Self In Group Frames"], C.unitframes, "selfingroup", "checkbox")
+      CreateConfig(nil, T["Use Raid Frames To Display Group Members"], C.unitframes, "raidforgroup", "checkbox")
       CreateConfig(nil, T["Hide Group Frames While In Raid"], C.unitframes.group, "hide_in_raid", "checkbox")
       CreateConfig(nil, T["Max Amount Of Raid Frames"], C.unitframes, "maxraid", "dropdown", pfUI.gui.dropdowns.maxraid)
 
@@ -2151,32 +2161,35 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Focus Color"], C.unitframes, "focuscolor", "color")
 
       CreateConfig(nil, T["Druid Settings"], nil, nil, "header")
-      CreateConfig(nil, T["Show Druid Mana Bar"], C.unitframes, "druidmanabar", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Druid Mana Bar Height"], C.unitframes, "druidmanaheight", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Druid Mana Bar Width (-1 = auto)"], C.unitframes, "druidmanawidth", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Druid Mana Bar X-Offset"], C.unitframes, "druidmanaoffx", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Druid Mana Bar Y-Offset"], C.unitframes, "druidmanaoffy", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Druid Mana Bar Spacing"], C.unitframes, "druidmanaspace", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Druid Mana Bar Texture"], C.unitframes, "druidmanatexture", "dropdown", pfUI.gui.dropdowns.uf_bartexture, nil, nil, nil, "vanilla" )
+      CreateConfig(nil, T["Show Druid Mana Bar"], C.unitframes, "druidmanabar", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Show Druid Mana Bar Text"], C.unitframes, "druidmanatext", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Druid Mana Bar Height"], C.unitframes, "druidmanaheight", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Druid Mana Bar Width (-1 = auto)"], C.unitframes, "druidmanawidth", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Druid Mana Bar X-Offset"], C.unitframes, "druidmanaoffx", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Druid Mana Bar Y-Offset"], C.unitframes, "druidmanaoffy", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Druid Mana Bar Spacing"], C.unitframes, "druidmanaspace", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Druid Mana Bar Texture"], C.unitframes, "druidmanatexture", "dropdown", pfUI.gui.dropdowns.uf_bartexture, nil, nil, nil)
 
+
+      CreateConfig(nil, T["Target Indicators"], nil, nil, "header")
+      CreateConfig(nil, T["Target Indicator Font Size"], C.unitframes, "indicator_font_size", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Show Line of Sight Indicator"], C.unitframes, "los_indicator", "checkbox", nil, nil, nil, nil)
 
       CreateConfig(nil, T["SuperWoW Settings"], nil, nil, "header")
-      CreateConfig(nil, T["Track Group on Minimap"], C.unitframes, "track_group", "checkbox", nil, nil, nil, nil, "vanilla" )
+      CreateConfig(nil, T["Track Group on Minimap"], C.unitframes, "track_group", "checkbox", nil, nil, nil, nil)
 
       CreateConfig(nil, T["Nampower Settings"], nil, nil, "header")
-      CreateConfig(nil, T["Show Spell Queue Indicator"], C.unitframes, "spellqueue", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Spell Queue Icon Size"], C.unitframes, "spellqueuesize", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Show Reactive Spell Indicator"], C.unitframes, "reactive_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Reactive Indicator Size"], C.unitframes, "reactive_size", nil, nil, nil, nil, nil, "vanilla" )
+      CreateConfig(nil, T["Show Spell Queue Indicator"], C.unitframes, "spellqueue", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Spell Queue Icon Size"], C.unitframes, "spellqueuesize", nil, nil, nil, nil, nil)
+      CreateConfig(nil, T["Show Reactive Spell Indicator"], C.unitframes, "reactive_indicator", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Reactive Indicator Size"], C.unitframes, "reactive_size", nil, nil, nil, nil, nil)
 
       CreateConfig(nil, T["UnitXP Settings"], nil, nil, "header")
-      CreateConfig(nil, T["Font Size for all UnitXP texts"], C.unitframes, "unitxp_font_size", nil, nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Show Line of Sight Indicator"], C.unitframes, "los_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Show Behind Indicator"], C.unitframes, "behind_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Show Distance of Target"], C.unitframes, "distance_indicator", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Hide yd characters"], C.unitframes, "hide_distance_yd", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Hook Distance to Portrait Frame"], C.unitframes, "distance_hook_portrait", "checkbox", nil, nil, nil, nil, "vanilla" )
-      CreateConfig(nil, T["Enable OS Notifications"], C.unitframes, "unitxp_notify", "checkbox", nil, nil, nil, nil, "vanilla" )
+      CreateConfig(nil, T["Show Behind Indicator"], C.unitframes, "behind_indicator", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Show Distance of Target"], C.unitframes, "distance_indicator", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Hide yd characters"], C.unitframes, "hide_distance_yd", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Hook Distance to Portrait Frame"], C.unitframes, "distance_hook_portrait", "checkbox", nil, nil, nil, nil)
+      CreateConfig(nil, T["Enable OS Notifications"], C.unitframes, "unitxp_notify", "checkbox", nil, nil, nil, nil)
     end)
 
     -- Shared Unit- and Groupframes
@@ -2194,6 +2207,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       [10] = { "grouptarget", T["Group-Target"]},
       [11] = { "grouppet",   T["Group-Pet"] },
       [12] = { "raid",       T["Raid"] },
+      [13] = { "raidpet",    T["Raid-Pet"] },
     }
 
     CreateGUIEntry(T["Unit Frames"], T["Click Casting"], function()
@@ -2243,10 +2257,10 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         U.ptarget     = U["pettarget"]
         U.grouptarget = U["group"]
         U.grouppet    = U["group"]
+        U.raidpet     = U["raid"]
 
         -- build config entries
         CreateConfig(U[c], T["Display Frame"] .. ": " .. t, C.unitframes[c], "visible", "checkbox")
-        CreateConfig(U[c], T["Enable Mouseover Tooltip"], C.unitframes[c], "showtooltip", "checkbox")
         CreateConfig(U[c], T["Default Transparency"], C.unitframes[c], "alpha_visible", "dropdown", pfUI.gui.dropdowns.percent_small)
         CreateConfig(U[c], T["Out Of Range Transparency"], C.unitframes[c], "alpha_outrange", "dropdown", pfUI.gui.dropdowns.percent_small)
         CreateConfig(U[c], T["Offline Transparency"], C.unitframes[c], "alpha_offline", "dropdown", pfUI.gui.dropdowns.percent_small)
@@ -2286,7 +2300,14 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
           CreateConfig(U[c], T["Layout"], nil, nil, "header")
           CreateConfig(U["raid"], T["Raid Padding"], C.unitframes[c], "raidpadding")
           CreateConfig(U["raid"], T["Raid Layout"], C.unitframes[c], "raidlayout", "dropdown", pfUI.gui.dropdowns.uf_raidlayout)
-          CreateConfig(U["raid"], T["Raid Fill Direction"], C.unitframes[c], "raidfill", "dropdown", pfUI.gui.dropdowns.uf_raidfill)
+          CreateConfig(U["raid"], T["Raid Fill Direction"], C.unitframes[c], "raidfill", "dropdown", pfUI.gui.dropdowns.orientation)
+          CreateConfig(U["raid"], T["Collapse Empty Slots"], C.unitframes[c], "collapse", "checkbox")
+        elseif c == "raidpet" then
+          CreateConfig(U[c], T["Layout"], nil, nil, "header")
+          CreateConfig(U["raid"], T["Raid Padding"], C.unitframes[c], "raidpadding")
+          CreateConfig(U["raid"], T["Raid Layout"], C.unitframes[c], "raidlayout", "dropdown", pfUI.gui.dropdowns.uf_raidlayout)
+          CreateConfig(U["raid"], T["Raid Fill Direction"], C.unitframes[c], "raidfill", "dropdown", pfUI.gui.dropdowns.orientation)
+          CreateConfig(U["raid"], T["Collapse Empty Slots"], C.unitframes[c], "collapse", "checkbox")
         end
 
         CreateConfig(U[c], T["Healthbar"], nil, nil, "header")
@@ -2324,6 +2345,15 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         CreateConfig(U[c], T["Right Text Y Offset"], C.unitframes[c], "txtpowerrightoffy")
         CreateConfig(U[c], T["Power Bar Anchor"], C.unitframes[c], "panchor", "dropdown", pfUI.gui.dropdowns.uf_powerbar_position)
 
+        if c == "player" then
+          CreateConfig(nil, T["Energy/Mana Ticks"], nil, nil, "header")
+          CreateConfig(nil, T["Enable Energy Ticks"], C.unitframes[c], "energy", "checkbox")
+          CreateConfig(nil, T["Enable Mana Ticks"], C.unitframes[c], "manatick", "checkbox")
+          CreateConfig(nil, T["Show Five Second Rule"], C.unitframes[c], "showfsr", "checkbox")
+          CreateConfig(nil, T["Five Second Rule Style"], C.unitframes[c], "fsrstyle", "dropdown", function() return {"0:Separate Bar", "1:Overlay"} end)
+          CreateConfig(nil, T["Five Second Rule Height"], C.unitframes[c], "fsrheight")
+        end
+
         CreateConfig(U[c], T["Combat Text"], nil, nil, "header")
         CreateConfig(U[c], T["Show Combat Text"], C.unitframes[c], "hitindicator", "checkbox")
         CreateConfig(U[c], T["Combat Text Font"], C.unitframes[c], "hitindicatorfont", "dropdown", pfUI.gui.dropdowns.fonts)
@@ -2335,21 +2365,23 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
         CreateConfig(U[c], T["Automatic Level Text Color"], C.unitframes[c], "levelcolor", "checkbox")
         CreateConfig(U[c], T["Automatic Class Text Color"], C.unitframes[c], "classcolor", "checkbox")
 
-        CreateConfig(U[c], T["Timer"], nil, nil, "header")
-        CreateConfig(U[c], T["Show Timer Text"], C.unitframes[c], "cooldown_text", "checkbox")
-        CreateConfig(Reload, T["Show Timer Animation"], C.unitframes[c], "cooldown_anim", "checkbox")
-
         CreateConfig(U[c], T["Buffs"], nil, nil, "header")
         CreateConfig(U[c], T["Buff Position"], C.unitframes[c], "buffs", "dropdown", pfUI.gui.dropdowns.uf_buff_position)
         CreateConfig(U[c], T["Buff Size"], C.unitframes[c], "buffsize")
         CreateConfig(U[c], T["Buff Limit"], C.unitframes[c], "bufflimit")
         CreateConfig(U[c], T["Buffs Per Row"], C.unitframes[c], "buffperrow")
+        CreateConfig(U[c], T["Own Buff Size"], C.unitframes[c], "ownbuffsize")
+        CreateConfig(U[c], T["Buff X-Spacing"], C.unitframes[c], "buffspacingx")
+        CreateConfig(U[c], T["Buff Y-Spacing"], C.unitframes[c], "buffspacingy")
 
         CreateConfig(U[c], T["Debuffs"], nil, nil, "header")
         CreateConfig(U[c], T["Debuff Position"], C.unitframes[c], "debuffs", "dropdown", pfUI.gui.dropdowns.uf_buff_position)
         CreateConfig(U[c], T["Debuff Size"], C.unitframes[c], "debuffsize")
         CreateConfig(U[c], T["Debuff Limit"], C.unitframes[c], "debufflimit")
         CreateConfig(U[c], T["Debuffs Per Row"], C.unitframes[c], "debuffperrow")
+        CreateConfig(U[c], T["Own Debuff Size"], C.unitframes[c], "owndebuffsize")
+        CreateConfig(U[c], T["Debuff X-Spacing"], C.unitframes[c], "debuffspacingx")
+        CreateConfig(U[c], T["Debuff Y-Spacing"], C.unitframes[c], "debuffspacingy")
 
         if c ~= "player" then
         end
@@ -2362,7 +2394,6 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
         CreateConfig(U[c], T["Buff/Debuff Indicators"], nil, nil, "header")
         CreateConfig(U[c], T["Enable Indicators"], C.unitframes[c], "buff_indicator", "checkbox")
-        CreateConfig(U[c], T["Show Time Left"], C.unitframes[c], "indicator_time", "checkbox")
         CreateConfig(U[c], T["Show Stacks"], C.unitframes[c], "indicator_stacks", "checkbox")
         CreateConfig(U[c], T["Indicator Size"], C.unitframes[c], "indicator_size")
         CreateConfig(U[c], T["Indicator Spacing"], C.unitframes[c], "indicator_spacing", "dropdown", pfUI.gui.dropdowns.spacing)
@@ -2423,11 +2454,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
 
         if c == "player" then
           CreateConfig(nil, T["Player SP/Haste Display"], nil, nil, "header")
-          CreateConfig(nil, T["Haste Display"], C.unitframes[c], "display_haste", "dropdown", {
-            "0:"..T["None"],
-            "1:"..T["Haste (cast speed increase)"],
-            "2:"..T["Effective Haste (Haste * cast time reduction)"], -- Only affects mages/warlocks I believe
-          })
+          CreateConfig(nil, T["Haste Display"], C.unitframes[c], "display_haste", "checkbox")
           CreateConfig(nil, T["Haste Display Color"], C.unitframes[c], "display_haste_color", "color")
           CreateConfig(nil, T["Display Spell Power"], C.unitframes[c], "display_spellpower", "checkbox")
           CreateConfig(nil, T["Use Custom Spell Power Color (unchecked = biggest school color)"], C.unitframes[c], "display_sp_color_override", "checkbox")
@@ -2436,20 +2463,48 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       end)
     end
 
+    CreateGUIEntry(T["Character"], T["Inventory"], function()
+      CreateConfig(nil, T["Show Durability"], C.character.inventory, "durability", "checkbox")
+      CreateConfig(nil, T["Always Show Equipment Slot Flyouts"], C.character.inventory, "equipflyout", "checkbox")
+    end)
+
+    CreateGUIEntry(T["Character"], T["Equipment Manager"], function()
+      CreateConfig(nil, T["Automatic Set Switching"], nil, nil, "header")
+      CreateConfig(U["equipmentmanager"], T["Enable Automatic Set Switching"], C.equipmentmanager, "autoswitch", "checkbox")
+      CreateConfig(U["equipmentmanager"], T["Announce Automatic Set Switches In Chat"], C.equipmentmanager, "announce", "checkbox")
+      CreateConfig(nil, T["Items Not In Any Set"], nil, nil, "header")
+      CreateConfig(U["equipmentmanager"], T["Minimum Item Quality"], C.equipmentmanager, "unusedquality", "dropdown", {
+        "0:" .. ITEM_QUALITY0_DESC,
+        "1:" .. ITEM_QUALITY1_DESC,
+        "2:" .. ITEM_QUALITY2_DESC,
+        "3:" .. ITEM_QUALITY3_DESC,
+        "4:" .. ITEM_QUALITY4_DESC,
+      })
+      CreateConfig(U["equipmentmanager"], T["Include Bank Items"], C.equipmentmanager, "unusedbank", "checkbox")
+    end)
+
+    CreateGUIEntry(T["Character"], T["Reputation"], function()
+      CreateConfig(nil, T["Show Reputation Remaining"], C.character.reputation, "repRequired", "checkbox")
+    end)
+
     CreateGUIEntry(T["Bags & Bank"], nil, function()
       CreateConfig(nil, T["Disable Item Quality Color For \"Common\" Items"], C.appearance.bags, "borderlimit", "checkbox")
       CreateConfig(nil, T["Enable Item Quality Color For Equipment Only"], C.appearance.bags, "borderonlygear", "checkbox")
       CreateConfig(nil, T["Highlight Unusable Items"], C.appearance.bags, "unusable", "checkbox")
       CreateConfig(nil, T["Unusable Item Color"], C.appearance.bags, "unusable_color", "color")
+      CreateConfig(nil, T["Highlight New Items"], C.appearance.bags, "newitem", "checkbox")
+      CreateConfig(nil, T["New Item Color"], C.appearance.bags, "newitem_color", "color")
       CreateConfig(nil, T["Enable Movable Bags"], C.appearance.bags, "movable", "checkbox")
       CreateConfig(nil, T["Anchor Bags Above Chat"], C.appearance.bags, "abovechat", "checkbox")
       CreateConfig(nil, T["Hide Chat When Bags Are Opened"], C.appearance.bags, "hidechat", "checkbox")
       CreateConfig(nil, T["Bagslots Per Row"], C.appearance.bags, "bagrowlength")
       CreateConfig(nil, T["Bankslots Per Row"], C.appearance.bags, "bankrowlength")
-      CreateConfig(nil, T["Enable Full-Text Search"], C.appearance.bags, "fulltext")
       CreateConfig(nil, T["Item Slot Size"], C.appearance.bags, "icon_size")
       CreateConfig(nil, T["Auto Sell Grey Items"], C.global, "autosell", "checkbox")
       CreateConfig(nil, T["Auto Repair Items"], C.global, "autorepair", "checkbox")
+      CreateConfig(nil, T["Auto Sort When Opening Bags"], C.appearance.bags, "autoSortOnOpen", "checkbox")
+      CreateConfig(nil, T["Reverse Sort Direction (Last Bag First)"], C.appearance.bags, "sortreverse", "checkbox")
+      CreateConfig(nil, T["Reverse Sort Priority (Hearthstone Last)"], C.appearance.bags, "sortprioreverse", "checkbox")
     end)
 
     CreateGUIEntry(T["Loot"], nil, function()
@@ -2494,7 +2549,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["buff"], T["Number Of Buffs Per Row"], C.buffs, "buffrowsize")
       CreateConfig(U["buff"], T["Number Of Debuffs Per Row"], C.buffs, "debuffrowsize")
       CreateConfig(U["buff"], T["Show Duration Inside Buff"], C.buffs, "textinside", "checkbox")
-      CreateConfig(U["buff"], T["Buff Font Size"], C.buffs, "fontsize")
+      CreateConfig(U["buff"], T["Stack Count Font Size"], C.buffs, "fontsize")
     end)
 
     CreateGUIEntry(T["Buffs"], T["Totem Icons"], function()
@@ -2569,9 +2624,6 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["bars"], T["Button Animation"], C.bars, "animation", "dropdown", pfUI.gui.dropdowns.actionbuttonanimations)
       CreateConfig(U["bars"], T["Button Animation Trigger"], C.bars, "animmode", "dropdown", pfUI.gui.dropdowns.animationmode)
       CreateConfig(U["bars"], T["Show Animation On Hidden Bars"], C.bars, "animalways", "checkbox")
-      if not pfUI:MacroAddonsLoaded() then
-        CreateConfig(U["bars"], T["Scan Macros For Spells"], C.bars, "macroscan", "checkbox", nil, nil, nil, nil, "vanilla")
-      end
       CreateConfig(U["bars"], T["Show Reagent Count"], C.bars, "reagents", "checkbox")
       CreateConfig(U["bars"], T["Highlight Equipped Items"], C.bars, "showequipped", "checkbox")
       CreateConfig(U["bars"], T["Equipped Item Color"], C.bars, "eqcolor", "color")
@@ -2593,14 +2645,14 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["bars"], T["Item Count Text Color"], C.bars, "count_color", "color")
       CreateConfig(U["bars"], T["Keybind Text Size"], C.bars, "bind_size")
       CreateConfig(U["bars"], T["Keybind Text Color"], C.bars, "bind_color", "color")
-      CreateConfig(nil, T["Cooldown Text Size"], C.bars, "cd_size")
 
       CreateConfig(nil, T["Auto Paging"], nil, nil, "header")
       CreateConfig(U["bars"], T["Switch Pages On Alt Key Press"], C.bars, "pagemasteralt", "checkbox")
       CreateConfig(U["bars"], T["Switch Pages On Shift Key Press"], C.bars, "pagemastershift", "checkbox")
       CreateConfig(U["bars"], T["Switch Pages On Ctrl Key Press"], C.bars, "pagemasterctrl", "checkbox")
       CreateConfig(U["bars"], T["Switch Pages On Druid Stealth"], C.bars, "druidstealth", "checkbox")
-      CreateConfig(nil, T["Range Based Hunter Paging"], C.bars, "hunterbar", "checkbox", nil, nil, nil, nil, "vanilla")
+      CreateConfig(U["bars"], T["Switch Pages On Priest Shadowform"], C.bars, "priestshadow", "checkbox")
+      CreateConfig(nil, T["Range Based Hunter Paging"], C.bars, "hunterbar", "checkbox", nil, nil, nil, nil)
     end)
 
     CreateGUIEntry(T["Actionbar"], T["Gryphons"], function()
@@ -2685,8 +2737,8 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
           elseif is_horizontal then
             if uneven ~= "Left" and uneven ~= "Right" then C.bars["bar"..id].uneven = "Left" end
           end
-          if uneven_frame and uneven_frame.input and uneven_frame.input.UpdateMenu then
-            uneven_frame.input:UpdateMenu()
+          if uneven_frame then
+            uneven_frame.input:GenerateMenu()
           end
           if U["bars"] then U["bars"]() end
         end
@@ -2775,74 +2827,99 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
     end)
 
     CreateGUIEntry(T["Tooltip"], nil, function()
+      CreateConfig(nil, T["General"], nil, nil, "header")
       CreateConfig(nil, T["Tooltip Position"], C.tooltip, "position", "dropdown", pfUI.gui.dropdowns.tooltip_position)
       CreateConfig(nil, T["Tooltip Text Font"], C.tooltip, "font_tooltip", "dropdown", pfUI.gui.dropdowns.fonts)
       CreateConfig(nil, T["Tooltip Text Font Size"], C.tooltip, "font_tooltip_size")
       CreateConfig(nil, T["Cursor Tooltip Align"], C.tooltip, "cursoralign", "dropdown", pfUI.gui.dropdowns.tooltip_align)
       CreateConfig(nil, T["Cursor Tooltip Offset"], C.tooltip, "cursoroffset")
-      CreateConfig(nil, T["Enable Extended Guild Information"], C.tooltip, "extguild", "checkbox")
-      CreateConfig(nil, T["Always Show Health In Percent"], C.tooltip, "alwaysperc", "checkbox")
-      CreateConfig(nil, T["Show Item IDs"], C.tooltip, "itemid", "checkbox")
       CreateConfig(nil, T["Custom Transparency"], C.tooltip, "alpha")
       CreateConfig(nil, T["Status Bar Texture"], C.tooltip.statusbar, "texture", "dropdown", pfUI.gui.dropdowns.uf_bartexture)
-      CreateConfig(nil, T["Compare Item Base Stats"], C.tooltip.compare, "basestats", "checkbox")
+
+      CreateConfig(nil, T["Items"], nil, nil, "header")
       CreateConfig(nil, T["Always Show Item Comparison"], C.tooltip.compare, "showalways", "checkbox")
       CreateConfig(nil, T["Always Show Extended Vendor Values"], C.tooltip.vendor, "showalways", "checkbox")
       CreateConfig(U["questitem"], T["Show Related Quest On Questitems"], C.tooltip.questitem, "showquest", "checkbox")
       CreateConfig(U["questitem"], T["Show Required Questitem Count"], C.tooltip.questitem, "showcount", "checkbox")
+      CreateConfig(nil, T["Show Item IDs"], C.tooltip, "itemid", "checkbox")
+
+      CreateConfig(nil, T["Spells"], nil, nil, "header")
+      CreateConfig(nil, T["Show Aura Caster"], C.tooltip, "aurasource", "checkbox")
+      CreateConfig(nil, T["Show Spell IDs"], C.tooltip, "spellid", "checkbox")
+
+      CreateConfig(nil, T["Units"], nil, nil, "header")
+      CreateConfig(nil, T["Enable Extended Guild Information"], C.tooltip, "extguild", "checkbox")
+      CreateConfig(nil, T["Always Show Health In Percent"], C.tooltip, "alwaysperc", "checkbox")
+      CreateConfig(nil, T["Show Movement Speed"], C.tooltip, "movespeed", "checkbox")
+      CreateConfig(nil, T["Show Unit Buffs"], C.tooltip, "showbuffs", "checkbox")
+      CreateConfig(nil, T["Show Unit IDs"], C.tooltip, "unitid", "checkbox")
     end)
 
-    CreateGUIEntry(T["Castbar"], nil, function()
+    CreateGUIEntry(T["Castbar"], T["General"], function()
       CreateConfig(nil, T["Use Unit Fonts"], C.castbar, "use_unitfonts", "checkbox")
       CreateConfig(nil, T["Casting Color"], C.appearance.castbar, "castbarcolor", "color")
       CreateConfig(nil, T["Channeling Color"], C.appearance.castbar, "channelcolor", "color")
+      CreateConfig(nil, T["Uninterruptible Color"], C.appearance.castbar, "shieldcolor", "color")
+      CreateConfig(nil, T["Five Second Rule Color"], C.appearance.castbar, "fsrcolor", "color")
       CreateConfig(nil, T["Castbar Texture"], C.appearance.castbar, "texture", "dropdown", pfUI.gui.dropdowns.uf_bartexture)
       CreateConfig(nil, T["Disable Blizzard Castbar"], C.castbar.player, "hide_blizz", "checkbox")
+    end)
 
-      CreateConfig(nil, T["Player Castbar"], nil, nil, "header")
+    CreateGUIEntry(T["Castbar"], T["Player"], function()
       CreateConfig(nil, T["Disable Player Castbar"], C.castbar.player, "hide_pfui", "checkbox")
       CreateConfig(nil, T["Castbar Width"], C.castbar.player, "width")
       CreateConfig(nil, T["Castbar Height"], C.castbar.player, "height")
       CreateConfig(nil, T["Show Spell Icon"], C.castbar.player, "showicon", "checkbox")
       CreateConfig(nil, T["Show Spell Name"], C.castbar.player, "showname", "checkbox")
+      CreateConfig(nil, T["Spell Name Alignment"], C.castbar.player, "namealign", "dropdown", pfUI.gui.dropdowns.castbaralign)
+      CreateConfig(nil, T["Spell Name X Offset"], C.castbar.player, "txtleftoffx")
+      CreateConfig(nil, T["Spell Name Y Offset"], C.castbar.player, "txtleftoffy")
       CreateConfig(nil, T["Show Timer"], C.castbar.player, "showtimer", "checkbox")
-      CreateConfig(nil, T["Left Text X Offset"], C.castbar.player, "txtleftoffx")
-      CreateConfig(nil, T["Left Text Y Offset"], C.castbar.player, "txtleftoffy")
+      CreateConfig(nil, T["Timer Alignment"], C.castbar.player, "timealign", "dropdown", pfUI.gui.dropdowns.castbaralign)
+      CreateConfig(nil, T["Timer X Offset"], C.castbar.player, "txtrightoffx")
+      CreateConfig(nil, T["Timer Y Offset"], C.castbar.player, "txtrightoffy")
       CreateConfig(nil, T["Show Lag"], C.castbar.player, "showlag", "checkbox")
       CreateConfig(nil, T["Show Rank"], C.castbar.player, "showrank", "checkbox")
-      CreateConfig(nil, T["Right Text X Offset"], C.castbar.player, "txtrightoffx")
-      CreateConfig(nil, T["Right Text Y Offset"], C.castbar.player, "txtrightoffy")
+      CreateConfig(nil, T["Merge Tradeskill Casts"], C.castbar.player, "mergetradeskill", "checkbox")
+    end)
 
-      CreateConfig(nil, T["Target Castbar"], nil, nil, "header")
+    CreateGUIEntry(T["Castbar"], T["Target"], function()
       CreateConfig(nil, T["Disable Target Castbar"], C.castbar.target, "hide_pfui", "checkbox")
       CreateConfig(nil, T["Castbar Width"], C.castbar.target, "width")
       CreateConfig(nil, T["Castbar Height"], C.castbar.target, "height")
       CreateConfig(nil, T["Show Spell Icon"], C.castbar.target, "showicon", "checkbox")
       CreateConfig(nil, T["Show Spell Name"], C.castbar.target, "showname", "checkbox")
+      CreateConfig(nil, T["Spell Name Alignment"], C.castbar.target, "namealign", "dropdown", pfUI.gui.dropdowns.castbaralign)
+      CreateConfig(nil, T["Spell Name X Offset"], C.castbar.target, "txtleftoffx")
+      CreateConfig(nil, T["Spell Name Y Offset"], C.castbar.target, "txtleftoffy")
       CreateConfig(nil, T["Show Timer"], C.castbar.target, "showtimer", "checkbox")
-      CreateConfig(nil, T["Left Text X Offset"], C.castbar.target, "txtleftoffx")
-      CreateConfig(nil, T["Left Text Y Offset"], C.castbar.target, "txtleftoffy")
+      CreateConfig(nil, T["Timer Alignment"], C.castbar.target, "timealign", "dropdown", pfUI.gui.dropdowns.castbaralign)
+      CreateConfig(nil, T["Timer X Offset"], C.castbar.target, "txtrightoffx")
+      CreateConfig(nil, T["Timer Y Offset"], C.castbar.target, "txtrightoffy")
       CreateConfig(nil, T["Show Lag"], C.castbar.target, "showlag", "checkbox")
       CreateConfig(nil, T["Show Rank"], C.castbar.target, "showrank", "checkbox")
-      CreateConfig(nil, T["Right Text X Offset"], C.castbar.target, "txtrightoffx")
-      CreateConfig(nil, T["Right Text Y Offset"], C.castbar.target, "txtrightoffy")
+    end)
 
-      CreateConfig(nil, T["Focus Castbar"], nil, nil, "header")
+    CreateGUIEntry(T["Castbar"], T["Focus"], function()
       CreateConfig(nil, T["Disable Focus Castbar"], C.castbar.focus, "hide_pfui", "checkbox")
       CreateConfig(nil, T["Castbar Width"], C.castbar.focus, "width")
       CreateConfig(nil, T["Castbar Height"], C.castbar.focus, "height")
       CreateConfig(nil, T["Show Spell Icon"], C.castbar.focus, "showicon", "checkbox")
       CreateConfig(nil, T["Show Spell Name"], C.castbar.focus, "showname", "checkbox")
+      CreateConfig(nil, T["Spell Name Alignment"], C.castbar.focus, "namealign", "dropdown", pfUI.gui.dropdowns.castbaralign)
+      CreateConfig(nil, T["Spell Name X Offset"], C.castbar.focus, "txtleftoffx")
+      CreateConfig(nil, T["Spell Name Y Offset"], C.castbar.focus, "txtleftoffy")
       CreateConfig(nil, T["Show Timer"], C.castbar.focus, "showtimer", "checkbox")
-      CreateConfig(nil, T["Left Text X Offset"], C.castbar.focus, "txtleftoffx")
-      CreateConfig(nil, T["Left Text Y Offset"], C.castbar.focus, "txtleftoffy")
+      CreateConfig(nil, T["Timer Alignment"], C.castbar.focus, "timealign", "dropdown", pfUI.gui.dropdowns.castbaralign)
+      CreateConfig(nil, T["Timer X Offset"], C.castbar.focus, "txtrightoffx")
+      CreateConfig(nil, T["Timer Y Offset"], C.castbar.focus, "txtrightoffy")
       CreateConfig(nil, T["Show Lag"], C.castbar.focus, "showlag", "checkbox")
       CreateConfig(nil, T["Show Rank"], C.castbar.focus, "showrank", "checkbox")
-      CreateConfig(nil, T["Right Text X Offset"], C.castbar.focus, "txtrightoffx")
-      CreateConfig(nil, T["Right Text Y Offset"], C.castbar.focus, "txtrightoffy")
     end)
 
     CreateGUIEntry(T["Chat"], nil, function()
+      -- a nop updater skips the reload prompt; the nop settings below
+      -- are read by AddMessage on every chat line
       CreateConfig(nil, T["Enable \"Loot & Spam\" Chat Window"], C.chat.right, "enable", "checkbox")
       CreateConfig(nil, T["Inputbox Width"], C.chat.text, "input_width")
       CreateConfig(nil, T["Inputbox Height"], C.chat.text, "input_height")
@@ -2851,16 +2928,20 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Show Items On Mouseover"], C.chat.text, "mouseover", "checkbox")
       CreateConfig(nil, T["Chat Default Brackets"], C.chat.text, "bracket", nil, nil, nil, nil, "STRING")
       CreateConfig(nil, T["Enable Timestamps"], C.chat.text, "time", "checkbox")
-      CreateConfig(nil, T["Timestamp Format"], C.chat.text, "timeformat", nil, nil, nil, nil, "STRING")
+      CreateConfig(nop, T["Timestamp Format"], C.chat.text, "timeformat", nil, nil, nil, nil, "STRING")
       CreateConfig(nil, T["Timestamp Brackets"], C.chat.text, "timebracket", nil, nil, nil, nil, "STRING")
       CreateConfig(nil, T["Timestamp Color"], C.chat.text, "timecolor", "color")
-      CreateConfig(nil, T["Hide Channel Names"], C.chat.text, "channelnumonly", "checkbox")
+      -- read each time chat copy opens, so no reload
+      CreateConfig(nop, T["Show Timestamps In Chat Copy"], C.chat.text, "copytime", "checkbox")
+      CreateConfig(nop, T["Hide Channel Names"], C.chat.text, "channelnumonly", "checkbox")
       CreateConfig(nil, T["Generate Playerlinks"], C.chat.text, "playerlinks", "checkbox")
-      CreateConfig(nil, T["Enable URL Detection"], C.chat.text, "detecturl", "checkbox")
-      CreateConfig(nil, T["Enable Class Colors"], C.chat.text, "classcolor", "checkbox")
-      CreateConfig(nil, T["Enable Player Levels"], C.chat.text, "playerlevel", "checkbox")
-      CreateConfig(nil, T["Who Search Unknown Classes (|cffffaaaaExperimental|r)"], C.chat.text, "whosearchunknown", "checkbox")
-      CreateConfig(nil, T["Colorize Unknown Classes"], C.chat.text, "tintunknown", "checkbox")
+      CreateConfig(nop, T["Enable URL Detection"], C.chat.text, "detecturl", "checkbox")
+      CreateConfig(nop, T["Enable Class Colors"], C.chat.text, "classcolor", "checkbox")
+      local _, playerRace = UnitRace("player")
+      CreateConfig(nop, T["Show Faction Icons"] .. " " .. GetFactionIcon(playerRace), C.chat.text, "factionicons", "checkbox")
+      CreateConfig(nop, T["Show Race Icons"] .. " " .. GetRaceIcon(playerRace, UnitSex("player")), C.chat.text, "raceicons", "checkbox")
+      CreateConfig(nop, T["Enable Player Levels"], C.chat.text, "playerlevel", "checkbox")
+      CreateConfig(nop, T["Colorize Unknown Classes"], C.chat.text, "tintunknown", "checkbox")
       CreateConfig(nil, T["Unknown Class Color"], C.chat.text, "unknowncolor", "color")
       CreateConfig(nil, T["Left Chat Width"], C.chat.left, "width")
       CreateConfig(nil, T["Left Chat Height"], C.chat.left, "height")
@@ -2871,16 +2952,16 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Only Show Chat Dock On Mouseover"], C.chat.global, "tabmouse", "checkbox")
       CreateConfig(nil, T["Enable Chat Tab Flashing"], C.chat.global, "chatflash", "checkbox")
       CreateConfig(nil, T["Enable Frame Shadow"], C.chat.global, "frameshadow", "checkbox")
-      CreateConfig(nil, T["Enable Custom Colors"], C.chat.global, "custombg", "checkbox")
-      CreateConfig(nil, T["Chat Background Color"], C.chat.global, "background", "color")
-      CreateConfig(nil, T["Chat Border Color"], C.chat.global, "border", "color")
+      CreateConfig(U["chat"], T["Enable Custom Colors"], C.chat.global, "custombg", "checkbox")
+      CreateConfig(U["chat"], T["Chat Background Color"], C.chat.global, "background", "color")
+      CreateConfig(U["chat"], T["Chat Border Color"], C.chat.global, "border", "color")
       CreateConfig(nil, T["Enable Custom Incoming Whispers Layout"], C.chat.global, "whispermod", "checkbox")
       CreateConfig(nil, T["Incoming Whispers Color"], C.chat.global, "whisper", "color")
       CreateConfig(nil, T["Enable Sticky Chat"], C.chat.global, "sticky", "checkbox")
       CreateConfig(nil, T["Maximum Number Of Chat Lines"], C.chat.global, "maxlines")
       CreateConfig(nil, T["Enable Chat Fade"], C.chat.global, "fadeout", "checkbox")
       CreateConfig(nil, T["Seconds Before Chat Fade"], C.chat.global, "fadetime")
-      CreateConfig(nil, T["Mousewheel Scroll Speed"], C.chat.global, "scrollspeed")
+      CreateConfig(nop, T["Mousewheel Scroll Speed"], C.chat.global, "scrollspeed")
       CreateConfig(nil, T["Enable Chat Bubbles"], "CVAR", "chatBubbles", "checkbox")
       CreateConfig(nil, T["Enable Party Chat Bubbles"], "CVAR", "chatBubblesParty", "checkbox")
       CreateConfig(nil, T["Enable Chat Bubble Borders"], C.chat.bubbles, "borders", "checkbox")
@@ -2892,7 +2973,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["nameplates"], T["Show On Friendly Units"], C.nameplates, "showfriendly", "checkbox")
       CreateConfig(U["nameplates"], T["Disable Hostile Nameplates In Friendly Zones"], C.nameplates, "disable_hostile_in_friendly", "checkbox")
       CreateConfig(U["nameplates"], T["Disable Friendly Nameplates In Friendly Zones"], C.nameplates, "disable_friendly_in_friendly", "checkbox")
-      CreateConfig(U["nameplates"], T["Vertical Offset (|cffffaaaaExperimental|r)"], C.nameplates, "vertical_offset", nil, nil, nil, nil, nil, "vanilla")
+      CreateConfig(U["nameplates"], T["Vertical Offset (|cffffaaaaExperimental|r)"], C.nameplates, "vertical_offset", nil, nil, nil, nil, nil)
       CreateConfig(U["nameplates"], T["Inactive Nameplate Alpha"], C.nameplates, "notargalpha", "dropdown", pfUI.gui.dropdowns.percent_small)
       CreateConfig(U["nameplates"], T["Draw Glow Around Target Nameplate"], C.nameplates, "targetglow", "checkbox")
       CreateConfig(U["nameplates"], T["Glow Color Around Target Nameplate"], C.nameplates, "glowcolor", "color")
@@ -2904,10 +2985,10 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["nameplates"], T["Enable Class Colors On Friends"], C.nameplates, "friendclassc", "checkbox")
       CreateConfig(U["nameplates"], T["Enable Class Colors On Friends Name"], C.nameplates, "friendclassnamec", "checkbox")
       CreateConfig(U["nameplates"], T["Enable Combo Point Display"], C.nameplates, "cpdisplay", "checkbox")
-      CreateConfig(U["nameplates"], T["Enable Clickthrough"], C.nameplates, "clickthrough", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(U["nameplates"], T["Enable Overlap"], C.nameplates, "overlap", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(U["nameplates"], T["Enable Mouselook With Right Click"], C.nameplates, "rightclick", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(U["nameplates"], T["Right Click Auto Attack Threshold"], C.nameplates, "clickthreshold", nil, nil, nil, nil, nil, "vanilla")
+      CreateConfig(U["nameplates"], T["Enable Clickthrough"], C.nameplates, "clickthrough", "checkbox", nil, nil, nil, nil)
+      CreateConfig(U["nameplates"], T["Enable Overlap"], C.nameplates, "overlap", "checkbox", nil, nil, nil, nil)
+      CreateConfig(U["nameplates"], T["Enable Mouselook With Right Click"], C.nameplates, "rightclick", "checkbox", nil, nil, nil, nil)
+      CreateConfig(U["nameplates"], T["Right Click Auto Attack Threshold"], C.nameplates, "clickthreshold", nil, nil, nil, nil, nil)
       CreateConfig(U["nameplates"], T["Use Unit Fonts"], C.nameplates, "use_unitfonts", "checkbox")
       CreateConfig(U["nameplates"], T["Font Style"], C.nameplates.name, "fontstyle", "dropdown", pfUI.gui.dropdowns.fontstyle)
       CreateConfig(U["nameplates"], T["Replace Totems With Icons"], C.nameplates, "totemicons", "checkbox")
@@ -2929,14 +3010,11 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["nameplates"], T["Enable Debuffs"], C.nameplates, "showdebuffs", "checkbox")
       CreateConfig(U["nameplates"], T["Show Debuffs on Hostile"], C.nameplates, "showdebuffs_hostile", "checkbox")
       CreateConfig(U["nameplates"], T["Show Debuffs on Friendly"], C.nameplates, "showdebuffs_friendly", "checkbox")
+      CreateConfig(U["nameplates"], T["Only Show Your Debuffs"], C.nameplates, "owndebuffs", "checkbox")
       CreateConfig(U["nameplates"], T["Debuff Position"], C.nameplates.debuffs, "position", "dropdown", pfUI.gui.dropdowns.debuffposition)
       CreateConfig(U["nameplates"], T["Debuff Icon Offset"], C.nameplates, "debuffoffset")
       CreateConfig(U["nameplates"], T["Debuff Icon Size"], C.nameplates, "debuffsize")
-      CreateConfig(U["nameplates"], T["Estimate Debuffs"], C.nameplates, "guessdebuffs", "checkbox")
       CreateConfig(U["nameplates"], T["Show Debuff Stacks"], C.nameplates.debuffs, "showstacks", "checkbox")
-      CreateConfig(U["nameplates"], T["Enable Debuff Timers"], C.nameplates, "debufftimers", "checkbox")
-      CreateConfig(U["nameplates"], T["Show Timer Text"], C.nameplates, "debufftext", "checkbox")
-      CreateConfig(Reload, T["Show Timer Animation"], C.nameplates, "debuffanim", "checkbox")
 
       CreateConfig(U["nameplates"], T["Filter Mode"], C.nameplates.debuffs, "filter", "dropdown", pfUI.gui.dropdowns.buffbarfilter)
       CreateConfig(U["nameplates"], T["Blacklist"], C.nameplates.debuffs, "blacklist", "list")
@@ -2956,6 +3034,7 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(U["nameplates"], T["Healthbar Texture"], C.nameplates, "healthtexture", "dropdown", pfUI.gui.dropdowns.uf_bartexture)
       CreateConfig(U["nameplates"], T["Show Health Points"], C.nameplates, "showhp", "checkbox")
       CreateConfig(U["nameplates"], T["Health Text Position"], C.nameplates, "hptextpos", "dropdown", pfUI.gui.dropdowns.textalign)
+      CreateConfig(U["nameplates"], T["Name Text Position"], C.nameplates, "nametextpos", "dropdown", pfUI.gui.dropdowns.textalign)
       CreateConfig(U["nameplates"], T["Health Text Format"], C.nameplates, "hptextformat", "dropdown", pfUI.gui.dropdowns.hpformat)
       CreateConfig(U["nameplates"], T["Hide Healthbar On Enemy NPCs"], C.nameplates, "enemynpc", "checkbox")
       CreateConfig(U["nameplates"], T["Hide Healthbar On Enemy Players"], C.nameplates, "enemyplayer", "checkbox")
@@ -2989,46 +3068,36 @@ pfUI:RegisterModule("gui", "vanilla:tbc", function ()
       CreateConfig(nil, T["Use Chat Colors for Meters"], C.thirdparty, "chatbg", "checkbox")
       CreateConfig(nil, "ShaguDPS (" .. T["Skin"] .. ")", C.thirdparty.shagudps, "skin", "checkbox")
       CreateConfig(nil, "ShaguDPS (" .. T["Dock"] .. ")", C.thirdparty.shagudps, "dock", "checkbox")
+      CreateConfig(nil, "GreedMeter (" .. T["Dock"] .. ")", C.thirdparty.greedmeter, "dock", "checkbox")
       CreateConfig(nil, "DPSMate (" .. T["Skin"] .. ")", C.thirdparty.dpsmate, "skin", "checkbox")
       CreateConfig(nil, "DPSMate (" .. T["Dock"] .. ")", C.thirdparty.dpsmate, "dock", "checkbox")
-      CreateConfig(nil, "Recount (" .. T["Skin"] .. ")", C.thirdparty.recount, "skin", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "Recount (" .. T["Dock"] .. ")", C.thirdparty.recount, "dock", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "Omen (" .. T["Skin"] .. ")", C.thirdparty.omen, "skin", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "Omen (" .. T["Dock"] .. ")", C.thirdparty.omen, "dock", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "SWStats (" .. T["Skin"] .. ")", C.thirdparty.swstats, "skin", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "SWStats (" .. T["Dock"] .. ")", C.thirdparty.swstats, "dock", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "KLH Threat Meter (" .. T["Skin"] .. ")", C.thirdparty.ktm, "skin", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "KLH Threat Meter (" .. T["Dock"] .. ")", C.thirdparty.ktm, "dock", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "TW Threatmeter (" .. T["Skin"] .. ")", C.thirdparty.twt, "skin", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "TW Threatmeter (" .. T["Dock"] .. ")", C.thirdparty.twt, "dock", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "WIM", C.thirdparty.wim, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "HealComm", C.thirdparty.healcomm, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "SortBags", C.thirdparty.sortbags, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "Bag_Sort", C.thirdparty.bag_sort, "enable", "checkbox", nil, nil, nil, nil, "tbc")
+      CreateConfig(nil, "SWStats (" .. T["Skin"] .. ")", C.thirdparty.swstats, "skin", "checkbox")
+      CreateConfig(nil, "SWStats (" .. T["Dock"] .. ")", C.thirdparty.swstats, "dock", "checkbox")
+      CreateConfig(nil, "KLH Threat Meter (" .. T["Skin"] .. ")", C.thirdparty.ktm, "skin", "checkbox")
+      CreateConfig(nil, "KLH Threat Meter (" .. T["Dock"] .. ")", C.thirdparty.ktm, "dock", "checkbox")
+      CreateConfig(nil, "TW Threatmeter (" .. T["Skin"] .. ")", C.thirdparty.twt, "skin", "checkbox")
+      CreateConfig(nil, "TW Threatmeter (" .. T["Dock"] .. ")", C.thirdparty.twt, "dock", "checkbox")
+      CreateConfig(nil, "WIM", C.thirdparty.wim, "enable", "checkbox")
+      CreateConfig(nil, "HealComm", C.thirdparty.healcomm, "enable", "checkbox")
+      CreateConfig(nil, "SortBags", C.thirdparty.sortbags, "enable", "checkbox")
       CreateConfig(nil, "MrPlow", C.thirdparty.mrplow, "enable", "checkbox")
-      CreateConfig(nil, "BetterCharacterStats", C.thirdparty.bcs, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "Crafty", C.thirdparty.crafty, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "CleverMacro", C.thirdparty.clevermacro, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "SuperCleveRoidMacros", C.thirdparty.supercleveroidmacros, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "AckisRecipeList", C.thirdparty.ackis, "enable", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "SheepWatch", C.thirdparty.sheepwatch, "enable", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "TotemTimers", C.thirdparty.totemtimers, "enable", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "DruidBar", C.thirdparty.druidbar, "enable", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "BCEPGP", C.thirdparty.bcepgp, "enable", "checkbox", nil, nil, nil, nil, "tbc")
-      CreateConfig(nil, "FlightMap", C.thirdparty.flightmap, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "TheoryCraft", C.thirdparty.theorycraft, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "SuperMacro", C.thirdparty.supermacro, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "AtlasLoot", C.thirdparty.atlasloot, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "MyRolePlay", C.thirdparty.myroleplay, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "DruidManaBar", C.thirdparty.druidmana, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
-      CreateConfig(nil, "NoteIt", C.thirdparty.noteit, "enable", "checkbox", nil, nil, nil, nil, "vanilla")
+      CreateConfig(nil, "BetterCharacterStats", C.thirdparty.bcs, "enable", "checkbox")
+      CreateConfig(nil, "Crafty", C.thirdparty.crafty, "enable", "checkbox")
+      CreateConfig(nil, "CleverMacro", C.thirdparty.clevermacro, "enable", "checkbox")
+      CreateConfig(nil, "SuperCleveRoidMacros", C.thirdparty.supercleveroidmacros, "enable", "checkbox")
+      CreateConfig(nil, "FlightMap", C.thirdparty.flightmap, "enable", "checkbox")
+      CreateConfig(nil, "TheoryCraft", C.thirdparty.theorycraft, "enable", "checkbox")
+      CreateConfig(nil, "SuperMacro", C.thirdparty.supermacro, "enable", "checkbox")
+      CreateConfig(nil, "AtlasLoot", C.thirdparty.atlasloot, "enable", "checkbox")
+      CreateConfig(nil, "MyRolePlay", C.thirdparty.myroleplay, "enable", "checkbox")
+      CreateConfig(nil, "DruidManaBar", C.thirdparty.druidmana, "enable", "checkbox")
+      CreateConfig(nil, "NoteIt", C.thirdparty.noteit, "enable", "checkbox")
     end)
 
     CreateGUIEntry(T["Components"], T["Modules"], function()
       table.sort(pfUI.modules)
       for i,m in pairs(pfUI.modules) do
-        -- skip gui and macrotweak when macro addons are loaded
-        if m ~= "gui" and not (m == "macrotweak" and pfUI:MacroAddonsLoaded()) then
+        if m ~= "gui" then
           -- create disabled entry if not existing and display
           pfUI:UpdateConfig("disabled", nil, m, "0")
           CreateConfig(nil, T["Disable Module"] .. " " .. m, C.disabled, m, "checkbox")

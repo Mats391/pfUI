@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Options - Video", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Options - Video", function ()
   -- on new PTR, OptionsFrameCategoryList exists meaning new combined panel is used
   if OptionsFrameCategoryList then return end
   local rawborder, border = GetBorderSize()
@@ -49,7 +49,7 @@ pfUI:RegisterSkin("Options - Video", "vanilla:tbc", function ()
 
   EnableMovable(OptionsFrame)
 
-  HookScript(OptionsFrame, "OnShow", function()
+  OptionsFrame:HookScript("OnShow", function()
     this:ClearAllPoints()
     this:SetPoint("CENTER", 0, 0)
   end)

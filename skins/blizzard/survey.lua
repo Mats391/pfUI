@@ -1,5 +1,5 @@
-pfUI:RegisterSkin("GM Survey", "vanilla", function ()
-  HookAddonOrVariable("Blizzard_GMSurveyUI", function()
+pfUI:RegisterSkin("GM Survey", function ()
+  HookAddon("Blizzard_GMSurveyUI", function()
     StripTextures(GMSurveyFrame)
     CreateBackdrop(GMSurveyFrame, nil, nil, .75)
     CreateBackdropShadow(GMSurveyFrame)

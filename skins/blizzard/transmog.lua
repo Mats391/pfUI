@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Transmog", "vanilla", function ()
+pfUI:RegisterSkin("Transmog", function ()
   if not TransmogFrame then return end
 
   -- Strip all background/border textures from the main frame
@@ -87,9 +87,7 @@ pfUI:RegisterSkin("Transmog", "vanilla", function ()
     end
   end
 
-  local origOnShow = TransmogFrame:GetScript("OnShow")
-  TransmogFrame:SetScript("OnShow", function()
-    if origOnShow then origOnShow() end
+  TransmogFrame:HookScript("OnShow", function()
     for i = 1, 20 do
       SkinLookButton(_G["TransmogFrameLook" .. i])
     end

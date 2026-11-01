@@ -1,16 +1,11 @@
-pfUI:RegisterSkin("Auctionhouse", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Auctionhouse", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
-  HookAddonOrVariable("Blizzard_AuctionUI", function()
-    -- Compatibility
-    if BrowseResetButton then -- tbc
-      SkinButton(BrowseResetButton)
-    else -- vanilla
-      SkinArrowButton(BidPrevPageButton, "left", 18)
-      SkinArrowButton(BidNextPageButton, "right", 18)
-      SkinArrowButton(AuctionsPrevPageButton, "left", 18)
-      SkinArrowButton(AuctionsNextPageButton, "right", 18)
-    end
+  HookAddon("Blizzard_AuctionUI", function()
+    SkinArrowButton(BidPrevPageButton, "left", 18)
+    SkinArrowButton(BidNextPageButton, "right", 18)
+    SkinArrowButton(AuctionsPrevPageButton, "left", 18)
+    SkinArrowButton(AuctionsNextPageButton, "right", 18)
 
     hooksecurefunc("AuctionFrame_OnShow", function()
       AuctionFrame:ClearAllPoints()
@@ -224,7 +219,7 @@ pfUI:RegisterSkin("Auctionhouse", "vanilla:tbc", function ()
       StripTextures(AuctionDressUpFrameCloseButton)
       SkinCloseButton(AuctionDressUpFrameCloseButton, AuctionDressUpFrame, -6, -6)
 
-      EnableClickRotate(AuctionDressUpModel)
+      EnableModelControls(AuctionDressUpModel)
       AuctionDressUpModelRotateLeftButton:Hide()
       AuctionDressUpModelRotateRightButton:Hide()
 

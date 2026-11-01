@@ -128,25 +128,15 @@ pfUI:RegisterModule("addoncompat", function ()
         {T["Yes"], function()
           ReloadUI()
         end},
-        {T["No"], function() end},
+        {T["No"], nop},
         nil)
     end
   end
 
   -- run the addonconflict queue when firstrun is ready
-  local delay = CreateFrame("Frame")
-  delay:SetScript("OnUpdate", function()
-    -- throttle to to one query per .1 second
-    if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + .1 end
-
-    -- make sure the firstrun dialog has finished
-    if pfUI.firstrun and pfUI.firstrun.steps then
-      for _, step in pairs(pfUI.firstrun.steps) do
-        if not pfUI_init[step.name] then return end
-      end
-    end
-
+  if pfUI.firstrun and pfUI.firstrun.completed then
     RunQueue()
-    this:SetScript("OnUpdate", nil)
-  end)
+  else
+    pfUI.events:RegisterCallback("firstrun:complete", RunQueue, "addoncompat")
+  end
 end)

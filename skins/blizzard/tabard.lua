@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Guild Tabard", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Guild Tabard", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
 
@@ -23,7 +23,7 @@ pfUI:RegisterSkin("Guild Tabard", "vanilla:tbc", function ()
 
   StripTextures(TabardFrameCostFrame)
 
-  EnableClickRotate(TabardModel)
+  EnableModelControls(TabardModel)
   TabardCharacterModelRotateLeftButton:Hide()
   TabardCharacterModelRotateRightButton:Hide()
 

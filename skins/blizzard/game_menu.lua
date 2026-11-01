@@ -1,14 +1,10 @@
-pfUI:RegisterSkin("Game Menu", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Game Menu", function ()
   StripTextures(GameMenuFrame)
   CreateBackdrop(GameMenuFrame, nil, true, .75)
   CreateBackdropShadow(GameMenuFrame)
 
-  GameMenuFrame:SetWidth(GameMenuFrame:GetWidth() - 30)
-  if pfUI.expansion == 'tbc' then
-    GameMenuFrame:SetHeight(GameMenuFrame:GetHeight() + 10)
-  elseif pfUI.expansion == 'vanilla' then
-    GameMenuFrame:SetHeight(GameMenuFrame:GetHeight() + 6)
-  end
+  local menuWidth, menuHeight = GameMenuFrame:GetSize()
+  GameMenuFrame:SetSize(menuWidth - 30, menuHeight + 6)
 
   local title = GetNoNameObject(GameMenuFrame, "FontString", "ARTWORK", MAIN_MENU)
   title:SetTextColor(1,1,1,1)
@@ -23,24 +19,20 @@ pfUI:RegisterSkin("Game Menu", "vanilla:tbc", function ()
     pfUI.gui:Show()
     HideUIPanel(GameMenuFrame)
   end)
-  SkinButton(pfUIButton)
 
   local point, relativeTo, relativePoint, xOffset, yOffset = GameMenuButtonOptions:GetPoint()
   GameMenuButtonOptions:SetPoint(point, relativeTo, relativePoint, xOffset, yOffset - 22)
 
-  local buttons = {
-    GameMenuButtonOptions,
-    GameMenuButtonSoundOptions,
-    GameMenuButtonUIOptions,
-    GameMenuButtonKeybindings,
-    GameMenuButtonMacros,
-    GameMenuButtonRatings,
-    GameMenuButtonLogout,
-    GameMenuButtonQuit,
-    GameMenuButtonContinue,
-  }
-
-  for _, button in pairs(buttons) do
-    if button then SkinButton(button) end
+  -- skin every button on the menu, including ones other addons add later
+  local function SkinMenuButtons()
+    for _, child in pairs({GameMenuFrame:GetChildren()}) do
+      if child:GetFrameType() == "Button" and not child._pfMenuSkinned then
+        SkinButton(child)
+        child._pfMenuSkinned = true
+      end
+    end
   end
+
+  SkinMenuButtons()
+  GameMenuFrame:HookScript("OnShow", SkinMenuButtons)
 end)

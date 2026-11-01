@@ -1,15 +1,48 @@
 pfUI:RegisterModule("questitem", function ()
-  local questlog = {}
-  local itemcache = {}
+  local requiredItems = {}
 
-  local function AddTooltip(frame, item)
-    -- abort when no item was given
-    if not item then return end
+  local function AddQuest(questID)
+    local details = C_QuestLog.GetQuestDetails(questID)
+    if not details then return false end
+    if details.requirements then
+      for _, req in ipairs(details.requirements) do
+        if req.kind == "item" and req.id and req.id > 0 then
+          requiredItems[req.id] = {
+            questID = questID,
+            title = details.title,
+            level = details.level,
+            count = req.count,
+          }
+        end
+      end
+    end
+    return true
+  end
 
-    -- abort if questitem is disabled
+  local function RemoveQuest(questID)
+    for itemID, entry in pairs(requiredItems) do
+      if entry.questID == questID then requiredItems[itemID] = nil end
+    end
+  end
+
+  local function Seed()
+    for k in pairs(requiredItems) do requiredItems[k] = nil end
+    local complete = true
+    local i = 1
+    while true do
+      local questID = C_QuestLog.GetQuestIDForLogIndex(i)
+      if questID == nil then break end
+      if questID > 0 and not AddQuest(questID) then complete = false end
+      i = i + 1
+    end
+    return complete
+  end
+
+  local function AddTooltip(frame, itemID)
+    if not itemID then return end
     if C.tooltip.questitem.showquest ~= "1" then return end
 
-    -- check if we can replace the questitem string
+    -- Replace the existing "Quest Item" line if the tooltip already has one.
     local replace = nil
     if frame and _G[frame:GetName().."TextLeft2"] then
       if _G[frame:GetName().."TextLeft2"]:GetText() == ITEM_BIND_QUEST then
@@ -17,48 +50,20 @@ pfUI:RegisterModule("questitem", function ()
       end
     end
 
-    -- set fallbacks for unidentified quests
+    local entry = requiredItems[itemID]
+    if not entry and not replace then return end
+
     local quest, level = UNKNOWN, 255
-
-    -- check cache for already existing values
-    if itemcache[item] and itemcache[item] == false then
-      -- not a quest item
-      return
-    elseif itemcache[item] then
-      -- read from caches
-      quest, level = GetQuestLogTitle(itemcache[item])
-    elseif item then
-      -- scan for quests
-      for id, text in pairs(questlog) do
-        if string.find(string.lower((text or "")), string.lower(item), 1) then
-          quest, level = GetQuestLogTitle(id)
-          itemcache[item] = id
-          break
-        end
-      end
-    end
-
-    -- mark non quest items
-    if not itemcache[item] and not replace then
-      itemcache[item] = false
-      return
-    end
-
-    -- return on invalid/empty quest results
+    if entry then quest, level = entry.title, entry.level end
     if not quest then return end
 
-    -- read difficulty color
     local color = GetDifficultyColor(level)
 
-    -- read item counts
-    if C.tooltip.questitem.showcount == "1" and itemcache[item] and itemcache[item] ~= false then
-      local _, _, required = strfind(string.lower(questlog[itemcache[item]]), "_"..string.lower(item).."_(.-)_")
-      if required then
-        quest = string.format("%s |cffaaaaaa[%s/%s]", quest, (GetItemCount(item) or 0), required)
-      end
+    if C.tooltip.questitem.showcount == "1" and entry and entry.count and entry.count > 0 then
+      local have = C_Item.GetItemCount(itemID) or 0
+      quest = string.format("%s |cffaaaaaa[%s/%s]", quest, have, entry.count)
     end
 
-    -- add quest to quest item
     if replace then
       _G[frame:GetName().."TextLeft2"]:SetText("|cffffffff"..ITEM_BIND_QUEST..": |r" .. quest)
       _G[frame:GetName().."TextLeft2"]:SetTextColor(color.r, color.g, color.b)
@@ -69,90 +74,49 @@ pfUI:RegisterModule("questitem", function ()
     frame:Show()
   end
 
-  -- initialize questlog scanner
-  pfUI.questitem = CreateFrame("Frame", "pfQuestItemScanner", UIParent)
-  pfUI.questitem:RegisterEvent("PLAYER_ENTERING_WORLD")
-  pfUI.questitem:RegisterEvent("QUEST_LOG_UPDATE")
-  pfUI.questitem:SetScript("OnEvent", function()
-    -- queue update events to run in .5 seconds
-    this.run = GetTime() + .5
-  end)
-
-  pfUI.questitem:SetScript("OnUpdate", function()
+  -- Seed half a second after the last trigger; each trigger pushes it back.
+  local seeding, timer
+  local function QueueSeed()
     if C.tooltip.questitem.showquest ~= "1" then return end
-
-    -- skip if nothing to do
-    if not this.run or GetTime() < this.run then return end
-
-    -- clear item caches
-    for name, quest in pairs(itemcache) do
-      itemcache[name] = nil
-    end
-
-    -- reload quests
-    local text, objective, objcount, objtext, header, _
-    local logid = GetQuestLogSelection()
-    for quest=1, 50 do
-      SelectQuestLogEntry(quest)
-
-      -- detect and ignore quest headers
-      if pfUI.client <= 11200 then -- vanilla
-        _, _, _, header = GetQuestLogTitle(quest)
-      elseif pfUI.client > 11200 then -- tbc
-        _, _, _, _, header = GetQuestLogTitle(quest)
-      end
-
-      if not header then
-        text, objective = GetQuestLogQuestText()
-        objcount = GetNumQuestLeaderBoards()
-        questlog[quest] = string.format("%s:%s", (text or ""), (objective or ""))
-
-        -- scan objectives
-        if objcount > 0 then
-          for i=1, objcount do
-            objtext = GetQuestLogLeaderBoard(i)
-            local _, _, obj, cur, req = strfind((objtext or ""), "(.*):%s*([%d]+)%s*/%s*([%d]+)")
-            if obj and req then
-              questlog[quest] = string.format("%s:_%s_%s_", questlog[quest], obj, req)
-            else
-              questlog[quest] = string.format("%s:%s", questlog[quest], (objtext or ""))
-            end
-          end
-        end
-      else
-        questlog[quest] = nil
-      end
-    end
-
-    -- restore questlog selection
-    SelectQuestLogEntry(logid)
-    this.run = nil
-  end)
-
-  -- reload quest entries on config change
-  pfUI.questitem.UpdateConfig = function()
-    pfUI.questitem.run = GetTime() + .5
+    seeding = true
+    if timer then timer:Cancel() end
+    timer = C_Timer.NewTimer(.5, function()
+      if Seed() then seeding = nil end
+    end)
   end
 
-  -- add to regular tooltips
-  pfUI.questitem.tooltip = CreateFrame("Frame", "pfQuestItems", GameTooltip )
+  -- seed pre-existing quests
+  pfUI.events:RegisterFrameEventAndCallback("PLAYER_ENTERING_WORLD", QueueSeed)
+
+  -- keep retrying while the quest cache warms
+  pfUI.events:RegisterFrameEventAndCallback("QUEST_LOG_UPDATE", function()
+    if seeding then QueueSeed() end
+  end)
+
+  -- a cold cache (rare) needs a full reseed
+  pfUI.events:RegisterFrameEventAndCallback("QUEST_ACCEPTED", function(_, _, questID)
+    if not AddQuest(questID) then QueueSeed() end
+  end)
+
+  pfUI.events:RegisterFrameEventAndCallback("QUEST_REMOVED", function(_, questID)
+    RemoveQuest(questID)
+  end)
+
+  pfUI.questitem = { UpdateConfig = QueueSeed }
+
+  pfUI.questitem.tooltip = CreateFrame("Frame", "pfQuestItems", GameTooltip)
   pfUI.questitem.tooltip:SetScript("OnShow", function()
-    if libtooltip:GetItemLink() then
-      local id = libtooltip:GetItemID()
-      if not id then return end
-      local name = GetItemInfo(id)
-      AddTooltip(GameTooltip, name)
+    if GameTooltip:HasItem() then
+      local _, _, id = GameTooltip:GetItem()
+      if id then AddTooltip(GameTooltip, id) end
     end
   end)
 
-  -- add to itemref tooltips
-  local HookSetItemRef = SetItemRef
-  _G.SetItemRef = function(link, text, button)
-    HookSetItemRef(link, text, button)
-    local item, _, id = string.find(link, "item:(%d+):.*")
-    if not IsAltKeyDown() and not IsShiftKeyDown() and not IsControlKeyDown() and item then
-      local name = GetItemInfo(id)
-      AddTooltip(ItemRefTooltip, name)
+  hooksecurefunc("SetItemRef", function()
+    if IsModifierKeyDown() then return end
+    if ItemRefTooltip:HasItem() then
+      local _, _, id = ItemRefTooltip:GetItem()
+      if id then AddTooltip(ItemRefTooltip, id) end
     end
-  end
+  end)
 end)

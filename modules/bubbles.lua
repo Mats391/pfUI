@@ -1,8 +1,8 @@
-pfUI:RegisterModule("bubbles", "vanilla:tbc", function ()
+pfUI:RegisterModule("bubbles", function ()
 
   local alpha = tonumber(C.chat.bubbles.alpha)
 
-  pfUI.bubbles = CreateFrame("Frame", "pfChatBubbles", UIParent)
+  pfUI.bubbles = Mixin(CreateFrame("Frame", "pfChatBubbles", UIParent), DirtiableMixin)
   pfUI.bubbles:RegisterEvent("CHAT_MSG_SAY")
   pfUI.bubbles:RegisterEvent("CHAT_MSG_YELL")
   pfUI.bubbles:RegisterEvent("CHAT_MSG_PARTY")
@@ -10,16 +10,6 @@ pfUI:RegisterModule("bubbles", "vanilla:tbc", function ()
   pfUI.bubbles:RegisterEvent("CHAT_MSG_MONSTER_SAY")
   pfUI.bubbles:RegisterEvent("CHAT_MSG_MONSTER_YELL")
   pfUI.bubbles:RegisterEvent("CHAT_MSG_MONSTER_PARTY")
-
-  pfUI.bubbles:SetScript("OnEvent", function()
-    pfUI.bubbles:SetScript("OnUpdate", pfUI.bubbles.ScanBubbles)
-  end)
-
-  function pfUI.bubbles:IsBubble(f)
-      if f:GetName() then return end
-      if not f:GetRegions() then return end
-      return f:GetRegions().GetTexture and f:GetRegions():GetTexture() == "Interface\\Tooltips\\ChatBubble-Background"
-  end
 
   function pfUI.bubbles:ProcessBubble(f)
     f.text:Hide()
@@ -32,9 +22,8 @@ pfUI:RegisterModule("bubbles", "vanilla:tbc", function ()
   end
 
   function pfUI.bubbles:ScanBubbles()
-    local childs = { WorldFrame:GetChildren() }
-    for _, f in pairs(childs) do
-        if not f.frame and pfUI.bubbles:IsBubble(f) then
+    for _, f in ipairs(C_ChatBubbles.GetAllChatBubbles()) do
+        if not f.frame then
           local textures = {f:GetRegions()}
           for _, object in pairs(textures) do
             if object:GetObjectType() == "Texture" then
@@ -66,7 +55,10 @@ pfUI:RegisterModule("bubbles", "vanilla:tbc", function ()
           end)
         end
     end
-
-    pfUI.bubbles:SetScript("OnUpdate", nil)
   end
+
+  -- Bubble frames are attached to WorldFrame after the chat event fires, so
+  -- the scan waits a frame, and runs once for all of that frame's messages.
+  pfUI.bubbles:SetDirtyMethod(pfUI.bubbles.ScanBubbles)
+  pfUI.bubbles:SetScript("OnEvent", pfUI.bubbles.MarkDirty)
 end)

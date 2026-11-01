@@ -1,15 +1,15 @@
-pfUI:RegisterSkin("Friends", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Friends", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
-  local maxtab = pfUI.expansion == "vanilla" and 4 or 5
+  local maxtab = 4
 
   StripTextures(FriendsFrame, true)
   CreateBackdrop(FriendsFrame, nil, nil, .75)
   CreateBackdropShadow(FriendsFrame)
 
   FriendsFrame.backdrop:SetPoint("TOPLEFT", 8, -10)
-  FriendsFrame.backdrop:SetPoint("BOTTOMRIGHT", -32, 74)
-  FriendsFrame:SetHitRectInsets(8,32,10,74)
+  FriendsFrame.backdrop:SetPoint("BOTTOMRIGHT", -32, 72)
+  FriendsFrame:SetHitRectInsets(8,32,10,72)
   EnableMovable("FriendsFrame")
 
   SkinCloseButton(FriendsFrameCloseButton, FriendsFrame.backdrop, -6, -6)
@@ -458,7 +458,7 @@ pfUI:RegisterSkin("Friends", "vanilla:tbc", function ()
     SkinButton(RaidFrameRaidInfoButton)
     SkinButton(RaidFrameConvertToRaidButton)
 
-    HookAddonOrVariable("Blizzard_RaidUI", function()
+    HookAddon("Blizzard_RaidUI", function()
       for i = 1, MAX_RAID_MEMBERS do
         StripTextures(_G["RaidGroupButton"..i])
         CreateBackdrop(_G["RaidGroupButton"..i], nil, true)

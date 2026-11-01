@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Merchant", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Merchant", function ()
   local rawborder, border = GetBorderSize()
   local bpad = rawborder > 1 and border - GetPerfectPixel() or GetPerfectPixel()
 
@@ -44,7 +44,7 @@ pfUI:RegisterSkin("Merchant", "vanilla:tbc", function ()
     merchantButton:SetHeight(37)
 
     local bg = merchantButton:CreateTexture(nil, "LOW")
-    bg:SetTexture(1,1,1,.05)
+    bg:SetColorTexture(1,1,1,.05)
     bg:SetAllPoints()
 
     local itemButton = _G["MerchantItem"..i.."ItemButton"]
@@ -72,7 +72,7 @@ pfUI:RegisterSkin("Merchant", "vanilla:tbc", function ()
 
   StripTextures(MerchantBuyBackItem)
   local bg = MerchantBuyBackItem:CreateTexture(nil, "LOW")
-  bg:SetTexture(1,1,1,.05)
+  bg:SetColorTexture(1,1,1,.05)
   bg:SetAllPoints()
 
   StripTextures(MerchantBuyBackItemItemButton)

@@ -1,4 +1,4 @@
-pfUI:RegisterModule("pixelperfect", "vanilla:tbc", function ()
+pfUI:RegisterModule("pixelperfect", function ()
   -- pre-calculated min values
   local statics = {
     [4] = 1.4222222222222,
@@ -33,9 +33,7 @@ pfUI:RegisterModule("pixelperfect", "vanilla:tbc", function ()
 
   -- pixelperfect: native UIScale listener
   if tonumber(C.global.pixelperfect) > 0 then
-    local f = CreateFrame("Frame")
-    f:RegisterEvent("PLAYER_ENTERING_WORLD")
-    f:SetScript("OnEvent", pixelperfect)
+    pfUI.events:RegisterFrameEventAndCallback("PLAYER_ENTERING_WORLD", pixelperfect)
     pixelperfect()
   end
 

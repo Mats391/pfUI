@@ -1,4 +1,4 @@
-pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
+pfUI:RegisterModule("unlock", function ()
   local rawborder, default_border = GetBorderSize()
 
   -- grouped frames
@@ -6,6 +6,7 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     -- Name            Shift  Ctrl
     { "pfCombo",          5       },
     { "pfRaid",           40,   5 },
+    { "pfRaidPet",        40,   5 },
     { "pfGroup",          4       },
     { "pfLootRollFrame",  4       },
   }
@@ -35,6 +36,8 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     -- groupframes
     ["Raid%d"]        = { T["Group Frames"], T["Raid"] },
     ["Raid%d%d"]      = { T["Group Frames"], T["Raid"] },
+    ["RaidPet%d"]     = { T["Group Frames"], T["Raid-Pet"] },
+    ["RaidPet%d%d"]   = { T["Group Frames"], T["Raid-Pet"] },
     ["Group%d"]       = { T["Group Frames"], T["Group"] },
     ["Party%dTarget"] = { T["Group Frames"], T["Group-Target"] },
     ["PartyPet%d"]    = { T["Group Frames"], T["Group-Pet"] },
@@ -98,7 +101,8 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
       -- search and add clustered frames
       for id, cluster in pairs(clusters) do
         local len = strlen(cluster[1])
-        if strsub(frame:GetName(),0,len) == cluster[1] then
+        local fid = tonumber(strsub(frame:GetName(),len+1,len+2))
+        if fid and strsub(frame:GetName(),0,len) == cluster[1] then
           if IsShiftKeyDown() and cluster[2] then
             for i = 1, cluster[2] do
               if _G[cluster[1] .. i] ~= frame then
@@ -106,7 +110,7 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
               end
             end
           elseif IsControlKeyDown() and cluster[3] then
-            local id = tonumber(strsub(frame:GetName(),len+1,len+2))
+            local id = fid
 
             local b = 1
             for i = cluster[3]+1, cluster[2], cluster[3] do
@@ -126,15 +130,6 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     return frames
   end
 
-  local function DraggerOnUpdate()
-    this.text:SetAlpha(this.text:GetAlpha() -0.05)
-    if this.text:GetAlpha() < 0.1 then
-      this.text:SetText(strsub(this:GetParent():GetName(),3))
-      this.text:SetAlpha(1)
-      this:SetScript("OnUpdate", function() return end)
-    end
-  end
-
   local function SaveScale(frame, scale)
     frame:SetScale(scale)
 
@@ -144,9 +139,8 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     C.position[frame:GetName()]["scale"] = scale
 
     frame.drag.text:SetText(T["Scale"] .. ": " .. scale)
-    frame.drag.text:SetAlpha(1)
-
-    frame.drag:SetScript("OnUpdate", DraggerOnUpdate)
+    frame.drag.fade:Stop()
+    frame.drag.fade:Play()
   end
 
   local function SavePosition(frame)
@@ -174,10 +168,10 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     for i = 0, 128 do
       if i == 128 / 2 then
         line = grid:CreateTexture(nil, 'BORDER')
-        line:SetTexture(.1, .5, .4)
+        line:SetColorTexture(.1, .5, .4)
       else
         line = grid:CreateTexture(nil, 'BACKGROUND')
-        line:SetTexture(0, 0, 0, .5)
+        line:SetColorTexture(0, 0, 0, .5)
       end
       line:SetPoint("TOPLEFT", grid, "TOPLEFT", i*wStep - (size/2), 0)
       line:SetPoint('BOTTOMRIGHT', grid, 'BOTTOMLEFT', i*wStep + (size/2), 0)
@@ -187,10 +181,10 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     for i = 1, floor(height/hStep) do
       if i == floor(height/hStep / 2) then
         line = grid:CreateTexture(nil, 'BORDER')
-        line:SetTexture(.1, .5, .4)
+        line:SetColorTexture(.1, .5, .4)
       else
         line = grid:CreateTexture(nil, 'BACKGROUND')
-        line:SetTexture(0, 0, 0)
+        line:SetColorTexture(0, 0, 0)
       end
 
       line:SetPoint("TOPLEFT", grid, "TOPLEFT", 0, -(i*hStep) + (size/2))
@@ -236,19 +230,6 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     if pfUI_config["position"] and pfUI_config["position"][drag.fname] and pfUI_config["position"][drag.fname]["xpos"] then
       dock.xcoord:SetText(pfUI_config["position"][drag.fname]["xpos"])
       dock.ycoord:SetText(pfUI_config["position"][drag.fname]["ypos"])
-      local anchor = pfUI_config["position"][drag.fname]["anchor"] or "TOPLEFT"
-
-      for id, k in pairs(anchors) do
-        -- get human readable
-        local value, text = strsplit(":", k)
-        text = text or value
-
-        if value == anchor then
-          UIDropDownMenu_SetSelectedID(pfUI.unlock.dock.anchor, id, 0)
-          UIDropDownMenu_SetText(text, pfUI.unlock.dock.anchor)
-        end
-      end
-
       dock.reset:SetText(T["Reset"])
 
       dock.up:Enable()
@@ -275,6 +256,9 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
       dock.left.texture:SetVertexColor(.4,.4,.4)
       dock.right.texture:SetVertexColor(.4,.4,.4)
     end
+
+    -- show the saved anchor, or none for a frame without a saved position
+    dock.anchor:GenerateMenu()
 
     -- update config button
     local cat, conf = GetConfigTable(drag.label)
@@ -319,7 +303,7 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     end
 
     if frame.OnMove then frame:OnMove() end
-    QueueFunction(UpdateDockValues)
+    RunNextFrame(UpdateDockValues)
   end
 
   local function DraggerOnDragStart()
@@ -451,6 +435,15 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
     d.text:SetPoint("CENTER", 0, 0)
     d.text:SetFontObject(GameFontWhite)
 
+    -- Fades out the scale readout, then puts the frame name back
+    d.fade = d.text:CreateAnimationGroup()
+    local fade = d.fade:CreateAnimation("Alpha")
+    fade:SetChange(-1)
+    fade:SetDuration(.3)
+    d.fade:SetScript("OnFinished", function()
+      d.text:SetText(strsub(f:GetName(),3))
+    end)
+
     d.frame = f
     d.fname = fname
     d.label = label
@@ -484,12 +477,6 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
 
   pfUI.unlock:SetScript("OnShow", function()
     if this.skip then this.skip = nil return end
-    if InCombatLockdown and InCombatLockdown() then
-      DEFAULT_CHAT_FRAME:AddMessage(ERR_NOT_IN_COMBAT, 1, .2, .2)
-      this.skip = true
-      this:Hide()
-      return
-    end
 
     this.grid = this.grid or DrawGrid()
 
@@ -503,6 +490,9 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
       frame:Show()
     end
 
+    -- lift the range and offline fade while unlocked
+    pfUI.uf:UpdateAllVisibility()
+
     local txt = T["Unlock Mode allows you to move, scale and reset frames:\n\n|cff33ffcc[Left Click]|r Drag Frame\n|cff33ffcc[Middle Click]|r Reset Frame\n|cff33ffcc[Right Click]|r Option Box\n\nHold |cff33ffcc[Shift]|r to select all frames of the same kind\nHold |cff33ffcc[Ctrl]|r to select all frames of the same group\n\n|cff33ffcc[Scroll]|r to change the scale of a frame\n\n|cff33ffcc[Click]|r on an empty area or press |cff33ffcc[Esc]|r to exit\n"]
     CreateInfoBox(txt, 15, pfUI.unlock, 180)
     pfUI.gui:Hide()
@@ -510,11 +500,6 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
 
   pfUI.unlock:SetScript("OnHide", function()
     if this.skip then this.skip = nil return end
-    if InCombatLockdown and InCombatLockdown() then
-      this.skip = true
-      this:Show()
-      return
-    end
 
     for name, frame in pairs(pfUI.movables) do
       local frame = frame or _G[name]
@@ -525,6 +510,10 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
       frame.drag:Hide()
       UpdateMovable(frame)
     end
+
+    -- show the unit frames whose unit came and hide the ones whose unit went
+    -- while unlocked
+    pfUI.uf:UpdateAllVisibility()
 
     SetDockToFrame(nil)
     pfUI.unlock:Hide()
@@ -547,41 +536,34 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
   pfUI.unlock.dock.title:SetPoint("TOP", 0, -5)
 
   -- anchor
-  pfUI.unlock.dock.anchor = CreateFrame("Frame", "pfUIUnlockAnchorDropDownMenu", pfUI.unlock.dock, "UIDropDownMenuTemplate")
-  pfUI.unlock.dock.anchor:ClearAllPoints()
-  pfUI.unlock.dock.anchor:SetPoint("TOP", 0, -25)
+  -- SetupMenu reads the selection at once, before any frame is docked
+  local function IsDockAnchor(anchor)
+    local drag = pfUI.unlock.dock.parent
+    local position = drag and pfUI_config["position"] and pfUI_config["position"][drag.fname]
+    return position and position["xpos"] and (position["anchor"] or "TOPLEFT") == anchor
+  end
 
-  UIDropDownMenu_SetWidth(120, pfUI.unlock.dock.anchor)
-  UIDropDownMenu_SetButtonWidth(120, pfUI.unlock.dock.anchor)
-  UIDropDownMenu_JustifyText("RIGHT", pfUI.unlock.dock.anchor)
-  UIDropDownMenu_Initialize(pfUI.unlock.dock.anchor, function()
-    local info = {}
-    for id, k in pairs(anchors) do
-      -- get human readable
-      local value, text = strsplit(":", k)
-      local id = id
-      text = text or value
+  -- moves the frame's saved position to count from another point of the screen
+  local function SetDockAnchor(anchor)
+    local frame = pfUI.unlock.dock.parent.frame
+    local point, x, y = ConvertFrameAnchor(frame, anchor)
+    frame:ClearAllPoints()
+    frame:SetPoint(point, UIParent, point, x, y)
 
-      info.text = text
-      info.checked = false
-      info.func = function()
-        UIDropDownMenu_SetSelectedID(pfUI.unlock.dock.anchor, id, 0)
-        UIDropDownMenu_SetText(text, pfUI.unlock.dock.anchor)
+    SavePosition(frame)
+    UpdateDockValues()
+  end
 
-        local frame = pfUI.unlock.dock.parent.frame
-        local anchor, x, y = ConvertFrameAnchor(frame, text)
-        frame:ClearAllPoints()
-        frame:SetPoint(anchor, UIParent, anchor, x, y)
-
-        SavePosition(frame)
-        UpdateDockValues()
-      end
-
-      UIDropDownMenu_AddButton(info)
+  pfUI.unlock.dock.anchor = CreateFrame("DropdownButton", nil, pfUI.unlock.dock, "pfUIDropdownTemplate")
+  pfUI.unlock.dock.anchor:SetPoint("TOP", 0, -28)
+  pfUI.unlock.dock.anchor:SetWidth(140)
+  pfUI.unlock.dock.anchor:SetDefaultText(T["N/A"])
+  CreateBackdrop(pfUI.unlock.dock.anchor, nil, true)
+  pfUI.unlock.dock.anchor:SetupMenu(function(dropdown, rootDescription)
+    for _, anchor in ipairs(anchors) do
+      rootDescription:CreateRadio(anchor, IsDockAnchor, SetDockAnchor, anchor)
     end
   end)
-
-  SkinDropDown(pfUI.unlock.dock.anchor)
 
   -- x coordinates
   pfUI.unlock.dock.xcoordcap = pfUI.unlock.dock:CreateFontString("Status", "DIALOG", "GameFontNormal")
@@ -679,7 +661,7 @@ pfUI:RegisterModule("unlock", "vanilla:tbc", function ()
 
     if frame.OnMove then frame:OnMove() end
 
-    QueueFunction(SetDockToFrame, pfUI.unlock.dock.parent)
+    RunNextFrame(function() SetDockToFrame(pfUI.unlock.dock.parent) end)
   end)
   SkinButton(pfUI.unlock.dock.reset,.2,1,.8)
 

@@ -1,4 +1,4 @@
-pfUI:RegisterSkin("Gossip and Quest", "vanilla:tbc", function ()
+pfUI:RegisterSkin("Gossip and Quest", function ()
   local frames = {'Quest', 'Gossip'}
   local panels = {'Greeting', 'Detail', 'Progress', 'Reward'}
   local buttons = {
@@ -21,7 +21,7 @@ pfUI:RegisterSkin("Gossip and Quest", "vanilla:tbc", function ()
     StripTextures(QuestRewardItemHighlight)
     local QuestRewardItemHighlight = CreateFrame("Frame", nil, QuestRewardScrollChildFrame)
     local QuestRewardItemHighlightBG = QuestRewardItemHighlight:CreateTexture(nil, "OVERLAY")
-    QuestRewardItemHighlightBG:SetTexture(1,1,1,.2)
+    QuestRewardItemHighlightBG:SetColorTexture(1,1,1,.2)
     QuestRewardItemHighlightBG:SetAllPoints()
 
     hooksecurefunc("QuestFrameItems_Update", function()
