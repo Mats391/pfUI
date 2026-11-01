@@ -136,6 +136,16 @@ function pfUI.api.UnitInRange(unit)
   return (inRange or not checked) and 1 or nil
 end
 
+function pfUI.api.UnitIn20ydRange(unit)
+  local distSq, checked = UnitDistanceSquared(unit)
+  return checked and distSq <= 400 or nil
+end
+
+function pfUI.api.UnitIn10ydRange(unit)
+  local distSq, checked = UnitDistanceSquared(unit)
+  return checked and distSq <= 100 or nil
+end
+
 -- [ UnitHasBuff ]
 -- Returns whether a unit has the named buff or not.
 -- unit         [string]        A unit to query (string, unitID)

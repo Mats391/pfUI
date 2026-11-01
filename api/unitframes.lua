@@ -248,6 +248,21 @@ local VISIBILITY_EVENTS = {
   UNIT_TARGET = true, -- a link of a chained frame's unit retargeted
 }
 
+
+function pfUI.api.IsUnitCharmed(unitstr)
+    if GetUnitField then
+      -- Get guid via the extended UnitExists for Nampower
+      local exists, guid = _G.UnitExists(unitstr)
+      if not exists or not guid then
+        return false
+      end
+      charmedBy = GetUnitField(guid, "charmedBy")
+      return charmedBy and charmedBy ~= '0x0000000000000000'
+    end
+    
+    return UnitIsCharmed(unitstr)
+end
+
 -- ============================================================================
 -- GetUnitStats - health + power for a unit token.
 -- Returns: hp, maxHp, power, maxPower, powerType
@@ -325,6 +340,28 @@ pfUI.events:RegisterCallback("aggro:changed", function(_, old, new)
     end
   end
 end, "unitframes")
+
+function pfUI.uf:GetRaidFrameId()
+    local self = self or this
+    -- cache result of strsub to avoid repeating calls
+    if not self.cache_raid then
+        if strsub(self:GetName(),0,6) == "pfRaid" then
+            self.cache_raid = tonumber(strsub(self:GetName(),7,8))
+        else
+            self.cache_raid = 0
+        end
+    end
+    
+    return self.cache_raid
+end
+
+function pfUI.uf:CanAssist(unit, unitstr)
+    if unit:GetRaidFrameId() > 0 then
+        return true
+    end
+
+    return UnitCanAssist("player", unitstr)
+end
 
 function pfUI.uf:UpdateVisibility()
   local self = self or this
@@ -760,21 +797,21 @@ function pfUI.uf:UpdateConfig()
   f.eventunit = nil
 
   f.hpLeftText:SetFontObject(GameFontWhite)
-  f.hpLeftText:SetFont(fontname, fontsize, fontstyle)
+  f.hpLeftText:SetFont(fontname, fontsize + tonumber(f.config.txthpleftsizedelta), fontstyle)
   f.hpLeftText:SetJustifyH("LEFT")
   f.hpLeftText:ClearAllPoints()
   f.hpLeftText:SetPoint("TOPLEFT",f.hp.bar, "TOPLEFT", 2*(default_border + f.config.txthpleftoffx), 1 + tonumber(f.config.txthpleftoffy))
   f.hpLeftText:SetPoint("BOTTOMRIGHT",f.hp.bar, "BOTTOMRIGHT", -2*(default_border + f.config.txthpleftoffx), f.config.txthpleftoffy)
 
   f.hpRightText:SetFontObject(GameFontWhite)
-  f.hpRightText:SetFont(fontname, fontsize, fontstyle)
+  f.hpRightText:SetFont(fontname, fontsize + tonumber(f.config.txthprightsizedelta), fontstyle)
   f.hpRightText:SetJustifyH("RIGHT")
   f.hpRightText:ClearAllPoints()
   f.hpRightText:SetPoint("TOPLEFT",f.hp.bar, "TOPLEFT", 2*(default_border + f.config.txthprightoffx), 1 + tonumber(f.config.txthprightoffy))
   f.hpRightText:SetPoint("BOTTOMRIGHT",f.hp.bar, "BOTTOMRIGHT", -2*(default_border + f.config.txthprightoffx), f.config.txthprightoffy)
 
   f.hpCenterText:SetFontObject(GameFontWhite)
-  f.hpCenterText:SetFont(fontname, fontsize, fontstyle)
+  f.hpCenterText:SetFont(fontname, fontsize + tonumber(f.config.txthpcentersizedelta), fontstyle)
   f.hpCenterText:SetJustifyH("CENTER")
   f.hpCenterText:ClearAllPoints()
   f.hpCenterText:SetPoint("TOPLEFT",f.hp.bar, "TOPLEFT", f.config.txthpcenteroffx, 1 + tonumber(f.config.txthpcenteroffy))
@@ -1521,6 +1558,7 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   f.RegisterChainEvents = pfUI.uf.RegisterChainEvents
   f.EnableClickCast  = pfUI.uf.EnableClickCast
   f.GetColor         = pfUI.uf.GetColor
+  f.GetRaidFrameId   = pfUI.uf.GetRaidFrameId
 
   -- cache values to the frame
   f.label = strlower(unit)
@@ -1665,19 +1703,181 @@ local function SetBarValue(bar, value)
   end
 end
 
+function pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
+    if not unit.config.los_ind then
+        if unit.hp.bar.noLosIndicator then
+            unit.hp.bar.noLosIndicator:Hide()
+        end
+        return true -- not checking, assume LOS
+    end
+    
+    -- No LOS indicator
+    unit.hp.bar.noLosIndicator = unit.hp.bar.noLosIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+    local indicator = unit.hp.bar.noLosIndicator
+        
+    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.los_ind_size)
+    indicator.tex = indicator.tex or indicator:CreateTexture(nil)
+    indicator.tex:SetAllPoints(indicator)
+    
+    local pos = unit.config.los_ind_pos
+    
+    if pos ~= indicator.pos then
+        indicator:ClearAllPoints()
+        indicator:SetPoint(pos, 0, 0)
+        indicator:SetBackdrop(nil)
+        indicator.pos = pos
+    end
+    
+    if size ~= indicator.size then
+        indicator:SetHeight(size)
+        indicator:SetWidth(size)
+        indicator.size = size
+    end
+    
+    local hasLos = UnitInLineOfSight(unitstr)
+    if not hasLos then
+        indicator.tex:SetTexture(pfUI.media["img:NoLos"])
+        indicator.tex:SetVertexColor(0.85, 0.0, 0.0, 1.0)
+        indicator.tex:Show()
+          
+        indicator:Show()
+        indicator:SetAlpha(1)
+        return false -- No LOS
+    end
+    
+    indicator:Hide()
+    return true -- has LOS
+end
+
+function pfUI.uf:RefreshHealIndicator(unit, unitstr)
+    -- Are they even enabled?
+    if not unit.config.heal_ind_20yd and not unit.config.heal_ind_10yd then
+        if unit.hp.bar.healIndicator then
+            unit.hp.bar.healIndicator:Hide()
+        end
+        return
+    end
+    
+    
+    if not pfUI.uf:CanAssist(unit, unitstr) or UnitIsDeadOrGhost(unitstr) then
+        if unit.hp.bar.healIndicator then
+            unit.hp.bar.healIndicator:Hide()
+        end
+        return
+    end
+    -- Heal indicator LOS
+    unit.hp.bar.healIndicator = unit.hp.bar.healIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+    local indicator = unit.hp.bar.healIndicator
+    
+    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.heal_ind_size)
+    local healPos = unit.config.heal_ind_pos
+    
+    if healPos ~= indicator.pos then
+        indicator:ClearAllPoints()
+        indicator:SetPoint(healPos, 0, 0)
+        indicator.pos = healPos
+    end
+    
+    if size ~= indicator.size then
+        indicator:SetHeight(size)
+        indicator:SetWidth(size)
+        indicator.size = size
+    end
+    
+    local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
+            
+    -- 1: 20yd, 2: 10yd AOE
+    indicator.type = nil
+    local type20yd = 1
+    local type10yd = 2
+    local show10yd = unit.config.heal_ind_10yd
+    local show20yd = unit.config.heal_ind_20yd
+    local minHealthMissing10yd = tonumber(unit.config.heal_ind_10yd_hp)
+    local minHealthMissing20yd = tonumber(unit.config.heal_ind_20yd_hp)
+    local alpha = tonumber(unit.config.heal_ind_alpha)
+    
+    if show10yd and healthMissing >= minHealthMissing10yd and pfUI.api.UnitIn10ydRange(unitstr) then 
+        indicator[type10yd] = indicator[type10yd] or CreateFrame("Frame", nil, indicator)
+        subIndicator = indicator[type10yd]
+        subIndicator:SetParent(indicator)
+        subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
+        subIndicator.tex:SetAllPoints(subIndicator)
+        if size ~= subIndicator.size then
+            subIndicator.tex:SetTexture(pfUI.media["img:Heal10"])
+            subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+            subIndicator.tex:Show()
+            subIndicator:ClearAllPoints()
+            subIndicator:SetHeight(size)
+            subIndicator:SetWidth(size)
+            subIndicator:SetBackdrop(nil)
+            subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
+            subIndicator.size = size
+        end
+        subIndicator:Show()
+        subIndicator:SetAlpha(alpha)
+        indicator:Show()
+        indicator:SetAlpha(1)
+    elseif indicator[type10yd] then
+        indicator[type10yd]:Hide()
+    end
+    if show20yd and healthMissing >= minHealthMissing20yd and pfUI.api.UnitIn20ydRange(unitstr) then 
+        indicator[type20yd] = indicator[type20yd] or CreateFrame("Frame", nil, indicator)
+        subIndicator = indicator[type20yd]
+        subIndicator:SetParent(indicator)
+        subIndicator.tex = subIndicator.tex or subIndicator:CreateTexture(nil)
+        subIndicator.tex:SetAllPoints(subIndicator)
+        if size ~= subIndicator.size then
+            subIndicator.tex:SetTexture(pfUI.media["img:Heal20"])
+            subIndicator.tex:SetVertexColor(1.0, 1.0, 1.0, 1.0)
+            subIndicator.tex:Show()
+            subIndicator:ClearAllPoints()
+            subIndicator:SetHeight(size)
+            subIndicator:SetWidth(size)
+            subIndicator:SetBackdrop(nil)
+            subIndicator:SetPoint("LEFT", indicator, "LEFT", 0, 0)
+            subIndicator.size = size
+        end
+        subIndicator:Show()
+        subIndicator:SetAlpha(alpha)
+        indicator:Show()
+        indicator:SetAlpha(1)
+    elseif indicator[type20yd] then
+        indicator[type20yd]:Hide()
+    end
+end
+
 function pfUI.uf:RefreshUnitState(unit)
   local alpha = unit.alpha_visible
   local unlock = pfUI.unlock and pfUI.unlock:IsShown() or nil
-
-  if not UnitIsConnected(unit.label .. unit.id) and not unlock then
-    -- offline
-    alpha = unit.alpha_offline
-    unit.hp.bar:SetMinMaxValues(0, 100)
-    unit.power.bar:SetMinMaxValues(0, 100)
-    SetBarValue(unit.hp.bar, 0)
-    SetBarValue(unit.power.bar, 0)
-  elseif unit.config.faderange == "1" and not pfUI.api.UnitInRange(unit.label .. unit.id) and not unlock then
-    alpha = unit.alpha_outrange
+  
+  
+  if not unlock then
+      local unitstr = unit.label .. unit.id
+      if not UnitIsConnected(unit.label .. unit.id) and not unlock then
+        -- offline
+        alpha = unit.alpha_offline
+        unit.hp.bar:SetMinMaxValues(0, 100)
+        unit.power.bar:SetMinMaxValues(0, 100)
+        SetBarValue(unit.hp.bar, 0)
+        SetBarValue(unit.power.bar, 0)
+      elseif unit.config.faderange == "1" then
+        if not pfUI.api.UnitInRange(unitstr) then
+            alpha = unit.alpha_outrange
+            if unit.hp.bar.healIndicator then
+                unit.hp.bar.healIndicator:Hide()
+            end
+            if unit.hp.bar.noLosIndicator then
+                unit.hp.bar.noLosIndicator:Hide()
+            end
+        else
+            local hasLos = pfUI.uf:RefreshNoLosIndicator(unit, unitstr)
+            if hasLos then
+                pfUI.uf:RefreshHealIndicator(unit, unitstr)
+            elseif unit.hp.bar.healIndicator then
+                unit.hp.bar.healIndicator:Hide()
+            end
+        end
+      end
   end
 
   -- skip if alpha is already correct
@@ -1977,119 +2177,162 @@ function pfUI.uf:RefreshUnit(unit, component)
     elseif not unit.dispellable then
       unit.dispellable = {}
     end
+    
+    local canAssist = pfUI.uf:CanAssist(unit, unitstr)
+    local isCharmedFriend = (unit:GetRaidFrameId() > 0 or not canAssist) and pfUI.api.IsUnitCharmed(unitstr)
 
     if table.getn(unit.dispellable) > 0 then
-      unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
+        
+      if canAssist then
+          unit.hp.bar.debuffindicators = unit.hp.bar.debuffindicators or CreateFrame("Frame", nil, unit.hp.bar)
 
-      -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
-      local disptype = unit.config.debuff_indicator
-      local indicator = unit.hp.bar.debuffindicators
-      local indipos = unit.config.debuff_ind_pos
-      local count = 0
-      local size
-
-      if disptype == "4" or disptype == "3" then
-        size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
-        if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
-          indicator:ClearAllPoints()
-          indicator:SetPoint(indipos, 0, 0)
-          indicator:SetSize(size, size)
-          indicator.size = size
-          indicator.disp = disptype
-          indicator.ipos  = indipos
-        end
-      elseif disptype == "2" or disptype == "1" then
-        size = "FULL"
-        if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
-          indicator:ClearAllPoints()
-          indicator:SetAllPoints(unit.hp.bar)
-          indicator.size = size
-          indicator.disp = disptype
-          indicator.ipos = indipos
-        end
-      end
-
-      -- Scan the 16 harmful slots once into a reusable set, instead of
-      -- re-scanning all 16 for every dispellable type below. Reused across
-      -- frames (populated and consumed within this single RefreshUnit call).
-      local present = pfUI.uf.dispelPresent or {}
-      pfUI.uf.dispelPresent = present
-      for k in pairs(present) do present[k] = nil end
-      local n = ScanAuraSlots(unitstr, "HARMFUL", auraSlots)
-      for i=1,n do
-        local name, _, _, dispelType = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
-        if name and dispelType and dispelType ~= "" then present[dispelType] = true end
-      end
-
-      for _, debuff in pairs(unit.dispellable) do
-        indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
-        indicator[debuff]:SetParent(indicator)
-        indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
-        indicator[debuff].tex:SetAllPoints(indicator[debuff])
-
-        if indicator.size ~= indicator[debuff].size or disptype ~= indicator[debuff].disp then
-          local dispelColor = C_UnitAuras.GetAuraDispelTypeColor(debuff)
-          if disptype == "4" then
-            indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
-            indicator[debuff].tex:SetVertexColor(dispelColor:GetRGBA())
-            indicator[debuff].tex:Show()
-            indicator[debuff]:ClearAllPoints()
-            indicator[debuff]:SetSize(size, size)
-            indicator[debuff]:SetBackdrop(nil)
-          elseif disptype == "3" then
-            indicator[debuff].tex:SetColorTexture(dispelColor:GetRGBA())
-            indicator[debuff].tex:SetVertexColor(1,1,1,1)
-            indicator[debuff].tex:Show()
-            indicator[debuff]:ClearAllPoints()
-            indicator[debuff]:SetSize(size, size)
-            indicator[debuff]:SetBackdrop(nil)
-          elseif disptype == "2" then
-            indicator[debuff].tex:Hide()
-            indicator[debuff]:SetAllPoints(unit.hp.bar)
-            indicator[debuff]:SetBackdrop(glow)
-            indicator[debuff]:SetBackdropBorderColor(dispelColor:GetRGBA())
-          elseif disptype == "1" then
-            indicator[debuff].tex:SetColorTexture(dispelColor:GetRGBA())
-            indicator[debuff].tex:SetVertexColor(1,1,1,1)
-            indicator[debuff].tex:Show()
-            indicator[debuff]:SetAllPoints(unit.hp.bar)
-            indicator[debuff]:SetBackdrop(nil)
-          end
-
-          indicator[debuff].size = indicator.size
-          indicator[debuff].disp = indicator.disp
-        end
-
-        indicator[debuff].visible = present[debuff]
-
-        if indicator[debuff].visible then
-          indicator[debuff]:Show()
-          indicator:Show()
-          indicator:SetAlpha(0)
-          if disptype == "4" or disptype == "3" then
-            indicator:SetAlpha(1)
-          elseif disptype == "2" then
-            indicator:SetAlpha(.4)
-          elseif disptype == "1" then
-            indicator:SetAlpha(.2)
-          end
+          -- 0 = OFF, 1 = Legacy, 2 = Glow, 3 = Square, 4 = Icons
+          local disptype = unit.config.debuff_indicator
+          local indicator = unit.hp.bar.debuffindicators
+          local indipos = unit.config.debuff_ind_pos
+          local count = 0
+          local size
 
           if disptype == "4" or disptype == "3" then
-            indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", count*(size+1), 0)
-            count = count + 1
+            size = unit.hp.bar:GetHeight() * tonumber(unit.config.debuff_ind_size)
+            if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
+              indicator:ClearAllPoints()
+              indicator:SetPoint(indipos, 0, 0)
+              indicator:SetSize(size, size)
+              indicator.size = size
+              indicator.disp = disptype
+              indicator.ipos  = indipos
+            end
+          elseif disptype == "2" or disptype == "1" then
+            size = "FULL"
+            if size ~= indicator.size or disptype ~= indicator.disp or indipos ~= indicator.ipos then
+              indicator:ClearAllPoints()
+              indicator:SetAllPoints(unit.hp.bar)
+              indicator.size = size
+              indicator.disp = disptype
+              indicator.ipos = indipos
+            end
           end
-        else
-          indicator[debuff]:Hide()
-        end
-      end
 
-      if disptype == "4" or disptype == "3" then
-        indicator:SetWidth(count*(size+1))
-      end
+          -- Scan the 16 harmful slots once into a reusable set, instead of
+          -- re-scanning all 16 for every dispellable type below. Reused across
+          -- frames (populated and consumed within this single RefreshUnit call).
+          local present = pfUI.uf.dispelPresent or {}
+          pfUI.uf.dispelPresent = present
+          for k in pairs(present) do present[k] = nil end
+          local n = ScanAuraSlots(unitstr, "HARMFUL", auraSlots)
+          for i=1,n do
+            local name, _, _, dispelType = C_UnitAuras.UnitAuraBySlot(unitstr, auraSlots[i])
+            if name and dispelType and dispelType ~= "" then present[dispelType] = true end
+          end
+
+          for _, debuff in pairs(unit.dispellable) do
+            indicator[debuff] = indicator[debuff] or CreateFrame("Frame", nil, indicator)
+            indicator[debuff]:SetParent(indicator)
+            indicator[debuff].tex = indicator[debuff].tex or indicator[debuff]:CreateTexture(nil)
+            indicator[debuff].tex:SetAllPoints(indicator[debuff])
+
+            if indicator.size ~= indicator[debuff].size or disptype ~= indicator[debuff].disp then
+              local dispelColor = C_UnitAuras.GetAuraDispelTypeColor(debuff)
+              if disptype == "4" then
+                indicator[debuff].tex:SetTexture(pfUI.media["img:"..debuff])
+                indicator[debuff].tex:SetVertexColor(dispelColor:GetRGBA())
+                indicator[debuff].tex:Show()
+                indicator[debuff]:ClearAllPoints()
+                indicator[debuff]:SetSize(size, size)
+                indicator[debuff]:SetBackdrop(nil)
+              elseif disptype == "3" then
+                indicator[debuff].tex:SetColorTexture(dispelColor:GetRGBA())
+                indicator[debuff].tex:SetVertexColor(1,1,1,1)
+                indicator[debuff].tex:Show()
+                indicator[debuff]:ClearAllPoints()
+                indicator[debuff]:SetSize(size, size)
+                indicator[debuff]:SetBackdrop(nil)
+              elseif disptype == "2" then
+                indicator[debuff].tex:Hide()
+                indicator[debuff]:SetAllPoints(unit.hp.bar)
+                indicator[debuff]:SetBackdrop(glow)
+                indicator[debuff]:SetBackdropBorderColor(dispelColor:GetRGBA())
+              elseif disptype == "1" then
+                indicator[debuff].tex:SetColorTexture(dispelColor:GetRGBA())
+                indicator[debuff].tex:SetVertexColor(1,1,1,1)
+                indicator[debuff].tex:Show()
+                indicator[debuff]:SetAllPoints(unit.hp.bar)
+                indicator[debuff]:SetBackdrop(nil)
+              end
+
+              indicator[debuff].size = indicator.size
+              indicator[debuff].disp = indicator.disp
+            end
+
+            indicator[debuff].visible = present[debuff]
+
+            if indicator[debuff].visible then
+              indicator[debuff]:Show()
+              indicator:Show()
+              indicator:SetAlpha(0)
+              if disptype == "4" or disptype == "3" then
+                indicator:SetAlpha(1)
+              elseif disptype == "2" then
+                indicator:SetAlpha(.4)
+              elseif disptype == "1" then
+                indicator:SetAlpha(.2)
+              end
+
+              if disptype == "4" or disptype == "3" then
+                indicator[debuff]:SetPoint("LEFT", indicator, "LEFT", count*(size+1), 0)
+                count = count + 1
+              end
+            else
+              indicator[debuff]:Hide()
+            end
+          end
+
+          if disptype == "4" or disptype == "3" then
+            indicator:SetWidth(count*(size+1))
+          end
+        elseif unit.hp.bar.debuffindicators then
+          unit.hp.bar.debuffindicators:Hide()
+        end
     elseif unit.hp.bar.debuffindicators then
       unit.hp.bar.debuffindicators:Hide()
     end
   end
+
+    if isCharmedFriend and unit.config.charm_ind then
+        unit.hp.bar.mcIndicator = unit.hp.bar.mcIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+        local indicator = unit.hp.bar.mcIndicator
+        local indipos = unit.config.charm_ind_pos
+        local size = unit.hp.bar:GetHeight() * tonumber(unit.config.charm_ind_size)
+        
+        indicator.tex = indicator.tex or indicator:CreateTexture(nil)
+        indicator.tex:SetAllPoints(indicator)
+        
+        if size ~= indicator.size or indipos ~= indicator.ipos then
+            indicator.tex:SetTexture(pfUI.media["img:Mindcontrol"])
+            indicator.tex:SetVertexColor(0.5, 0.0, 0.0, 1)
+            indicator.tex:Show()
+            indicator:ClearAllPoints()
+            indicator:SetHeight(size)
+            indicator:SetWidth(size)
+            indicator:SetPoint(indipos, 0, 0)
+            indicator:SetBackdrop(nil)
+            
+            indicator.size = size
+            indicator.ipos = indipos
+        end
+        
+        indicator:Show()
+        indicator:SetAlpha(1)
+    elseif unit.hp.bar.mcIndicator then
+        unit.hp.bar.mcIndicator:Hide()
+    end
+
+    if not unit.indicators and unit.config.buff_indicator == "1" then
+      unit.indicators = pfUI.uf:SetupBuffIndicators(unit.config)
+    elseif not unit.indicators then
+      unit.indicators = {}
+    end
 
   -- buff indicators carry timers and stacks, so a re-time redraws them too
   if component == "all" or component == "aura" or component == "auratime" then
@@ -2686,7 +2929,8 @@ function pfUI.uf:GetStatusValue(unit, pos)
   elseif config == "name" then
     return unit:GetColor("unit") .. pfUI.uf:GetNameString(unitstr)
   elseif config == "nameshort" then
-    return unit:GetColor("unit") .. strsub(UnitName(unitstr), 0, 3)
+    local length = tonumber(unit.config.txthpshortnamelen)
+    return unit:GetColor("unit") .. strsub(UnitName(unitstr), 0, length)
   elseif config == "level" then
     return unit:GetColor("level") .. pfUI.uf:GetLevelString(unitstr)
   elseif config == "class" then
