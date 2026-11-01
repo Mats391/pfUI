@@ -6,8 +6,8 @@ pfUI:RegisterModule("castbar", function ()
   local cbtexture = pfUI.media[C.appearance.castbar.texture]
 
   -- Helper function for castbar timer formatting
-  local function FormatCastbarTime(value)
-    if C.unitframes.castbardecimals == "1" then
+  local function FormatCastbarTime(value, decimals)
+    if decimals == "1" then
       -- 1 decimal, round half up (matches Blizzard spellbook display)
       return string.format("%.1f", floor(value * 10 + 0.5) / 10)
     else
@@ -310,12 +310,12 @@ pfUI:RegisterModule("castbar", function ()
       end
 
       if this.showtimer then
-        if (this.delay or 0) > 0 then
-          local prefix = "|cffffaaaa" .. (this.isChannel and "-" or "+") .. FormatCastbarTime(this.delay) .. " |r "
-          this.bar.right:SetText(prefix .. FormatCastbarTime(cur) .. " / " .. FormatCastbarTime(max))
-        else
-          this.bar.right:SetText(FormatCastbarTime(cur) .. " / " .. FormatCastbarTime(max))
-        end
+          if this.delay and this.delay > 0 then
+            local delay = "|cffffaaaa" .. (channel and "-" or "+") .. FormatCastbarTime(this.delay, C.unitframes.castbardecimalscur) .. " |r "
+            this.bar.right:SetText(delay .. FormatCastbarTime(cur, C.unitframes.castbardecimalscur) .. " / " .. FormatCastbarTime(max, C.unitframes.castbardecimals))
+          else
+            this.bar.right:SetText(FormatCastbarTime(cur, C.unitframes.castbardecimalscur) .. " / " .. FormatCastbarTime(max, C.unitframes.castbardecimals))
+          end
       end
     end)
 

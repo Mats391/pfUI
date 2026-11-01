@@ -1684,7 +1684,7 @@ nameplates:RegisterUnitEvent("UNIT_SPELLCAST_NOT_INTERRUPTIBLE", "target", "focu
   -- would actually differ. Reset via lastEndTime-changed branch above.
   local function SetCastbarText(castbar, remaining)
     local rounded
-    if C.unitframes.castbardecimals == "1" then
+    if C.unitframes.castbardecimalscur == "1" then
       rounded = floor(remaining * 10)
       if castbar.lastTextTick ~= rounded then
         castbar.lastTextTick = rounded
