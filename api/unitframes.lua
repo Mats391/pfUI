@@ -788,7 +788,7 @@ function pfUI.uf:UpdateConfig()
   local fade = f.config.faderange == "1" and C.unitframes.rangecheck == "1"
   local unitxp = C.unitframes.rangecheck_mode == "unitxp" and _G.UnitXP
   f.rangeevent = fade and not unitxp or nil
-  f.rangepoll = fade and (f.config.los_ind or (unitxp and true or nil))
+  f.rangepoll = fade and (f.config.los_ind or unit.config.heal_ind_20yd or unit.config.heal_ind_10yd or (unitxp and true or nil))
 
   -- aggro:changed reaches only the frames that show aggro
   f.aggro = (f.config.squareaggro == "1" or f.config.glowaggro == "1") or nil
