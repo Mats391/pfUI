@@ -784,10 +784,11 @@ function pfUI.uf:UpdateConfig()
   -- range fade: UnitInRange's answer comes as an event, a UnitXP threshold
   -- has none and is polled. With the 40y check off a frame fades by sight,
   -- which UNIT_DISTANCE_CHECK_UPDATE reports.
+  -- For LOS indicator polling is also needed
   local fade = f.config.faderange == "1" and C.unitframes.rangecheck == "1"
   local unitxp = C.unitframes.rangecheck_mode == "unitxp" and _G.UnitXP
   f.rangeevent = fade and not unitxp or nil
-  f.rangepoll = fade and unitxp and true or nil
+  f.rangepoll = fade and (f.config.los_ind or (unitxp and true or nil))
 
   -- aggro:changed reaches only the frames that show aggro
   f.aggro = (f.config.squareaggro == "1" or f.config.glowaggro == "1") or nil
@@ -1853,7 +1854,7 @@ function pfUI.uf:RefreshUnitState(unit)
   
   if not unlock then
       local unitstr = unit.label .. unit.id
-      if not UnitIsConnected(unit.label .. unit.id) and not unlock then
+      if not UnitIsConnected(unit.label .. unit.id) then
         -- offline
         alpha = unit.alpha_offline
         unit.hp.bar:SetMinMaxValues(0, 100)
