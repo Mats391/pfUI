@@ -137,8 +137,8 @@ function pfUI.api.UnitInRange(unit)
 end
 
 function pfUI.api.UnitIn20ydRange(unit)
-  local distSq, checked = UnitDistanceSquared(unit)
-  return checked and distSq <= 400 or nil
+  -- Holy Shock
+  return C_Spell.IsSpellInRange(20473, unit)
 end
 
 function pfUI.api.UnitIn10ydRange(unit)
