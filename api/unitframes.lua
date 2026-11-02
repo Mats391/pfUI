@@ -250,17 +250,7 @@ local VISIBILITY_EVENTS = {
 
 
 function pfUI.api.IsUnitCharmed(unitstr)
-    if GetUnitField then
-      -- Get guid via the extended UnitExists for Nampower
-      local exists, guid = _G.UnitExists(unitstr)
-      if not exists or not guid then
-        return false
-      end
-      charmedBy = GetUnitField(guid, "charmedBy")
-      return charmedBy and charmedBy ~= '0x0000000000000000'
-    end
-    
-    return UnitIsCharmed(unitstr)
+    return UnitIsPossessed(unitstr)
 end
 
 -- ============================================================================
@@ -356,6 +346,7 @@ function pfUI.uf:GetRaidFrameId()
 end
 
 function pfUI.uf:CanAssist(unit, unitstr)
+    -- Raid frame can always assist raid frames
     if unit:GetRaidFrameId() > 0 then
         return true
     end
@@ -1849,6 +1840,43 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
     end
 end
 
+function pfUI.uf:RefreshCharmIndicator(unit, unitstr, canAssist)
+    local isRaidFrame = unit:GetRaidFrameId() > 0
+    local isCharmedFriend = (isRaidFrame or not canAssist) and pfUI.api.IsUnitCharmed(unitstr)
+    
+    if not isCharmedFriend then
+        if unit.hp.bar.mcIndicator then
+            unit.hp.bar.mcIndicator:Hide()
+        end
+        return
+    end
+
+    unit.hp.bar.mcIndicator = unit.hp.bar.mcIndicator or CreateFrame("Frame", nil, unit.hp.bar)
+    local indicator = unit.hp.bar.mcIndicator
+    local indipos = unit.config.charm_ind_pos
+    local size = unit.hp.bar:GetHeight() * tonumber(unit.config.charm_ind_size)
+    
+    indicator.tex = indicator.tex or indicator:CreateTexture(nil)
+    indicator.tex:SetAllPoints(indicator)
+    
+    if size ~= indicator.size or indipos ~= indicator.ipos then
+        indicator.tex:SetTexture(pfUI.media["img:Mindcontrol"])
+        indicator.tex:SetVertexColor(0.5, 0.0, 0.0, 1)
+        indicator.tex:Show()
+        indicator:ClearAllPoints()
+        indicator:SetHeight(size)
+        indicator:SetWidth(size)
+        indicator:SetPoint(indipos, 0, 0)
+        indicator:SetBackdrop(nil)
+        
+        indicator.size = size
+        indicator.ipos = indipos
+    end
+    
+    indicator:Show()
+    indicator:SetAlpha(1)
+end
+
 function pfUI.uf:RefreshUnitState(unit)
   local alpha = unit.alpha_visible
   local unlock = pfUI.unlock and pfUI.unlock:IsShown() or nil
@@ -2183,8 +2211,6 @@ function pfUI.uf:RefreshUnit(unit, component)
     end
     
     local canAssist = pfUI.uf:CanAssist(unit, unitstr)
-    local isCharmedFriend = (unit:GetRaidFrameId() > 0 or not canAssist) and pfUI.api.IsUnitCharmed(unitstr)
-
     if table.getn(unit.dispellable) > 0 then
         
       if canAssist then
@@ -2301,42 +2327,20 @@ function pfUI.uf:RefreshUnit(unit, component)
     elseif unit.hp.bar.debuffindicators then
       unit.hp.bar.debuffindicators:Hide()
     end
-  end
-
-    if isCharmedFriend and unit.config.charm_ind then
-        unit.hp.bar.mcIndicator = unit.hp.bar.mcIndicator or CreateFrame("Frame", nil, unit.hp.bar)
-        local indicator = unit.hp.bar.mcIndicator
-        local indipos = unit.config.charm_ind_pos
-        local size = unit.hp.bar:GetHeight() * tonumber(unit.config.charm_ind_size)
-        
-        indicator.tex = indicator.tex or indicator:CreateTexture(nil)
-        indicator.tex:SetAllPoints(indicator)
-        
-        if size ~= indicator.size or indipos ~= indicator.ipos then
-            indicator.tex:SetTexture(pfUI.media["img:Mindcontrol"])
-            indicator.tex:SetVertexColor(0.5, 0.0, 0.0, 1)
-            indicator.tex:Show()
-            indicator:ClearAllPoints()
-            indicator:SetHeight(size)
-            indicator:SetWidth(size)
-            indicator:SetPoint(indipos, 0, 0)
-            indicator:SetBackdrop(nil)
-            
-            indicator.size = size
-            indicator.ipos = indipos
-        end
-        
-        indicator:Show()
-        indicator:SetAlpha(1)
+    
+    if unit.config.charm_ind then
+        pfUI.uf:RefreshCharmIndicator(unit, unitstr, canAssist)
     elseif unit.hp.bar.mcIndicator then
         unit.hp.bar.mcIndicator:Hide()
     end
+  end
 
-    if not unit.indicators and unit.config.buff_indicator == "1" then
-      unit.indicators = pfUI.uf:SetupBuffIndicators(unit.config)
-    elseif not unit.indicators then
-      unit.indicators = {}
-    end
+ 
+  if not unit.indicators and unit.config.buff_indicator == "1" then
+    unit.indicators = pfUI.uf:SetupBuffIndicators(unit.config)
+  elseif not unit.indicators then
+    unit.indicators = {}
+  end
 
   -- buff indicators carry timers and stacks, so a re-time redraws them too
   if component == "all" or component == "aura" or component == "auratime" then
