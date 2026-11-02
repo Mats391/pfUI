@@ -1787,7 +1787,7 @@ function pfUI.uf:RefreshHealIndicator(unit, unitstr)
         indicator.size = size
     end
     
-    local healthMissing = UnitHealthMax(unitstr) - UnitHealth(unitstr)
+    local healthMissing = UnitHealthMissing(unitstr)
             
     -- 1: 20yd, 2: 10yd AOE
     indicator.type = nil
