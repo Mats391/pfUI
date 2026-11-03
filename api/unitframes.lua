@@ -857,7 +857,6 @@ function pfUI.uf:UpdateConfig()
     f.incHeal:SetPoint("BOTTOM", f.hp.bar, "BOTTOM", 0, 0)
   end
 
-  f.ressIcon:SetFrameLevel(16)
   f.ressIcon:SetSize(32, 32)
   f.ressIcon:SetPoint("CENTER", f, "CENTER", 0, 4)
   f.ressIcon.texture:SetTexture(pfUI.media["img:ress"])
