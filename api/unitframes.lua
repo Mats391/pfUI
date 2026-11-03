@@ -250,7 +250,17 @@ local VISIBILITY_EVENTS = {
 
 
 function pfUI.api.IsUnitCharmed(unitstr)
-    return UnitIsPossessed(unitstr)
+    if GetUnitField then
+      -- Get guid via the extended UnitExists for Nampower
+      local exists, guid = _G.UnitExists(unitstr)
+      if not exists or not guid then
+        return false
+      end
+      charmedBy = GetUnitField(guid, "charmedBy")
+      return charmedBy and charmedBy ~= '0x0000000000000000'
+    end
+    
+    return UnitIsCharmed(unitstr)
 end
 
 -- ============================================================================
