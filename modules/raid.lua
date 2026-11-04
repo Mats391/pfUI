@@ -30,8 +30,8 @@ pfUI:RegisterModule("raid", function ()
   -- flat pool of pet frames, laid out by LayoutPets (mirror or collapsed)
   pfUI.uf.raid.pets = {}
 
-  -- 1-based grid slot -> (row, col) for the current fill direction, matching
-  -- the raid grid's own fill loops.
+  -- 1-based grid slot -> (col, row) for the current fill direction, shared by
+  -- the raid and pet grids.
   local function SlotToCoord(slot, fill, x, y)
     slot = slot - 1
     if fill == "VERTICAL" then
@@ -81,6 +81,7 @@ pfUI:RegisterModule("raid", function ()
     local layout = pfUI.uf.raid[1].config.raidlayout
     local padding = tonumber(pfUI.uf.raid[1].config.raidpadding)*GetPerfectPixel()
     local fill = pfUI.uf.raid[1].config.raidfill
+    local growleft = pfUI.uf.raid[1].config.raidgrowleft == "1"
     local _, _, x, y = string.find(layout,"(.+)x(.+)")
     x, y = tonumber(x), tonumber(y)
 

@@ -19,11 +19,11 @@ local auraCorners = {
 }
 
 -- Flows the shown icons of an aura block outward from the frame edge, starting
--- `offset` away from it (its own row gap when nil): `perrow` icons per row,
--- each row as tall as its largest icon. The first `icons.own` icons are the
--- player's (C_UnitAuras lists them first) and use `icons.ownsize`. Returns the
--- offset just past the block's last row, where a block sharing the same corner
--- continues.
+-- `offset` away from it (its own row gap when nil) and shifted on screen by
+-- `offx`/`offy`: `perrow` icons per row, each row as tall as its largest icon.
+-- The first `icons.own` icons are the player's (C_UnitAuras lists them first)
+-- and use `icons.ownsize`. Returns the offset just past the block's last
+-- shifted row, where a block sharing the same corner continues.
 local function LayoutAuraBlock(unit, icons, offset)
   local corner = auraCorners[icons.pos]
   local anchor = unit.config.portraitheight ~= "-1" and unit.hp or unit
@@ -42,7 +42,7 @@ local function LayoutAuraBlock(unit, icons, offset)
     local size = i <= icons.own and icons.ownsize or icons.size
     icons[i]:SetSize(size, size)
     icons[i]:ClearAllPoints()
-    icons[i]:SetPoint(corner[1], anchor, icons.pos, corner[2] * x, corner[3] * offset)
+    icons[i]:SetPoint(corner[1], anchor, icons.pos, icons.offx + corner[2] * x, icons.offy + corner[3] * offset)
 
     x = x + size + icons.gapx
     if size > rowsize then rowsize = size end
@@ -50,7 +50,7 @@ local function LayoutAuraBlock(unit, icons, offset)
     i = i + 1
   end
 
-  if col > 0 then offset = offset + rowsize + icons.gapy end
+  if col > 0 then offset = offset + rowsize + icons.gapy + corner[3] * icons.offy end
   return offset
 end
 
@@ -261,6 +261,48 @@ function pfUI.api.IsUnitCharmed(unitstr)
     end
     
     return UnitIsCharmed(unitstr)
+end
+    
+-- The units of a chain that unit events name by token, whatever nampower does
+-- with its GUID events: the focus, and the focus's target, whose unit events
+-- ClassicAPI fires as "focustarget" from the unit's own fields.
+local CHAIN_TOKENS = { focus = true, focustarget = true }
+
+-- The events a frame hears hidden or not: the visibility events that concern
+-- the unit it was created for (raid.lua remaps a raid frame's label, so this is
+-- decided once, at creation), and the logout guard. UNIT_TARGET belongs to
+-- RegisterChainEvents, and focus.lua drives the focus frames itself.
+local function GetIdleEvents(label, fname)
+  local events = { PLAYER_ENTERING_WORLD = true, PLAYER_LOGOUT = true }
+  if label:find("^party") or label:find("^raid")
+  or fname == "Group0" or fname == "PartyPet0" or fname == "Party0Target" then
+    events.PARTY_MEMBERS_CHANGED = true
+    events.RAID_ROSTER_UPDATE = true
+  end
+  if label:find("^target") then events.PLAYER_TARGET_CHANGED = true end
+  if label:find("pet") then events.UNIT_PET = true end
+  return events
+end
+
+-- The events that only redraw what a frame shows. A hidden frame drops them,
+-- and OnShow's full refresh catches up on whatever it missed.
+local SHOWN_EVENTS = {
+  "PLAYER_AURAS_CHANGED", -- label=player && frame=buff
+  "PLAYER_EQUIPMENT_CHANGED", -- label=player && frame=buff (ClassicAPI: weapon-enchant buffs)
+  "PARTY_MEMBERS_CHANGED", -- frame=leaderIcon
+  "PARTY_LEADER_CHANGED", -- frame=leaderIcon
+  "RAID_ROSTER_UPDATE", -- frame=raidIcon
+  "PLAYER_UPDATE_RESTING", -- frame=restIcon
+  "PARTY_LOOT_METHOD_CHANGED", -- frame=lootIcon
+  "RAID_TARGET_UPDATE", -- frame=raidIcon
+}
+
+local function RegisterShownEvents(frame)
+  for i = 1, table.getn(SHOWN_EVENTS) do
+    frame:RegisterEvent(SHOWN_EVENTS[i])
+  end
+  -- label=pet; the player's own pet only, not every pet in view
+  frame:RegisterUnitEvent("UNIT_HAPPINESS", "pet")
 end
 
 -- ============================================================================
@@ -483,7 +525,9 @@ function pfUI.uf:UpdateVisibility()
   --
   -- A chained unit -- another unit's target, "targettarget" or "party1target"
   -- -- has no token that unit events name, so the frame follows it by GUID,
-  -- which every unit event also fires with. It follows the unit only while
+  -- which nampower fires every unit event with too, unless its GUID events
+  -- are off or filtered. The focus's target is named (CHAIN_TOKENS), so that
+  -- frame follows its token instead. It follows the unit only while
   -- the client has it: a link's target can be out of sight, and its coming
   -- back is then a new unit too. The unit changes with no event of its own
   -- whenever a link of the chain retargets; UNIT_TARGET on every link reports
@@ -492,8 +536,9 @@ function pfUI.uf:UpdateVisibility()
   self.chain = visibility ~= "hide" and unitstr:match("^(.+)target$") or nil
   if self.chain then
     local guid = UnitName(unitstr) and UnitGUID(unitstr)
-    if guid ~= self.eventunit then self.update_full = true end
-    self:RegisterUnitEvents(guid)
+    if guid ~= self.unitguid then self.update_full = true end
+    self.unitguid = guid
+    self:RegisterUnitEvents(guid and CHAIN_TOKENS[unitstr] and unitstr or guid)
   else
     self:RegisterUnitEvents(visibility ~= "hide" and unitstr or nil)
   end
@@ -917,6 +962,8 @@ function pfUI.uf:UpdateConfig()
     f.buffs.size = tonumber(f.config.buffsize)
     f.buffs.ownsize = f.config.ownbuffsize == "-1" and f.buffs.size or tonumber(f.config.ownbuffsize)
     f.buffs.perrow = tonumber(f.config.buffperrow)
+    f.buffs.offx = tonumber(f.config.buffoffx)
+    f.buffs.offy = tonumber(f.config.buffoffy)
     f.buffs.gapx = aura_border + tonumber(f.config.buffspacingx)
     f.buffs.gapy = aura_border + tonumber(f.config.buffspacingy)
     f.buffs.own = 0
@@ -939,7 +986,7 @@ function pfUI.uf:UpdateConfig()
       f.buffs[i]:SetFrameLevel(12)
       f.buffs[i]:RegisterForClicks("RightButtonUp")
 
-      f.buffs[i].cd = f.buffs[i].cd or CreateCooldown(f.buffs[i], "unitframe", f.buffs[i]:GetName() .. "Cooldown")
+      f.buffs[i].cd = f.buffs[i].cd or CreateCooldown(f.buffs[i], "aura", f.config, "aura_timers", f.buffs[i]:GetName() .. "Cooldown")
       f.buffs[i].cd:SetFrameLevel(14)
 
       f.buffs[i].id = i
@@ -967,6 +1014,8 @@ function pfUI.uf:UpdateConfig()
     f.debuffs.size = tonumber(f.config.debuffsize)
     f.debuffs.ownsize = f.config.owndebuffsize == "-1" and f.debuffs.size or tonumber(f.config.owndebuffsize)
     f.debuffs.perrow = tonumber(f.config.debuffperrow)
+    f.debuffs.offx = tonumber(f.config.debuffoffx)
+    f.debuffs.offy = tonumber(f.config.debuffoffy)
     f.debuffs.gapx = aura_border + tonumber(f.config.debuffspacingx)
     f.debuffs.gapy = aura_border + tonumber(f.config.debuffspacingy)
     f.debuffs.own = 0
@@ -990,7 +1039,7 @@ function pfUI.uf:UpdateConfig()
       f.debuffs[i]:RegisterForClicks("RightButtonUp")
       f.debuffs[i]:SetNormalTexture(nil)
       
-      f.debuffs[i].cd = f.debuffs[i].cd or CreateCooldown(f.debuffs[i], "unitframe", f.debuffs[i]:GetName() .. "Cooldown")
+      f.debuffs[i].cd = f.debuffs[i].cd or CreateCooldown(f.debuffs[i], "aura", f.config, "aura_timers", f.debuffs[i]:GetName() .. "Cooldown")
       f.debuffs[i].cd:SetFrameLevel(14)
 
       f.debuffs[i].id = i
@@ -1020,8 +1069,17 @@ function pfUI.uf:UpdateConfig()
 end
 
 function pfUI.uf.OnShow()
-  pfUI.uf:RefreshUnit(this, "portrait")
-  pfUI.uf:RefreshUnit(this, "base")
+  RegisterShownEvents(this)
+  pfUI.uf:RefreshUnit(this, "all")
+end
+
+function pfUI.uf.OnHide()
+  for i = 1, table.getn(SHOWN_EVENTS) do
+    if not this.idleevents[SHOWN_EVENTS[i]] then
+      this:UnregisterEvent(SHOWN_EVENTS[i])
+    end
+  end
+  this:UnregisterEvent("UNIT_HAPPINESS")
 end
 
 function pfUI.uf.OnEvent()
@@ -1349,8 +1407,8 @@ local UNIT_EVENTS = {
 
 -- Auras and power. ClassicAPI's UNIT_AURA_DELTA also reports refreshes and new
 -- durations and says what changed; its generic power events name the power, so
--- a frame skips the ones it does not draw. Both fire for tokens only, so a
--- chained unit, followed by GUID, keeps 1.12's events instead. A group
+-- a frame skips the ones it does not draw. Both fire for tokens only, and not
+-- as "focustarget", so a chained unit keeps 1.12's events instead. A group
 -- member's connection and sight come with them, and a chained unit has
 -- neither event.
 local TOKEN_EVENTS = {
@@ -1415,16 +1473,18 @@ end
 -- unit, whose `owner` is the unit it is the target of -- for
 -- "targettargettarget" the links are "targettarget" and "target" -- or drop it
 -- when `owner` is nil. By GUID, since the inner links are no token that events
--- name. Cheap to call repeatedly: it re-registers only when a link changed.
+-- name, save the ones in CHAIN_TOKENS. Cheap to call repeatedly: it
+-- re-registers only when a link changed.
 local chainlinks = {}
 function pfUI.uf:RegisterChainEvents(owner)
   local n, key = 0, nil
   while owner do
     local guid = UnitGUID(owner)
     if guid then
+      local link = CHAIN_TOKENS[owner] and owner or guid
       n = n + 1
-      chainlinks[n] = guid
-      key = key and key .. guid or guid
+      chainlinks[n] = link
+      key = key and key .. link or link
     end
     owner = owner:match("^(.+)target$")
   end
@@ -1443,19 +1503,10 @@ end
 function pfUI.uf:EnableEvents()
   local f = self
 
-  f:RegisterEvent("PLAYER_ENTERING_WORLD")
-  f:RegisterEvent("PLAYER_LOGOUT")
-  f:RegisterEvent("PLAYER_AURAS_CHANGED") -- label=player && frame=buff
-  f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED") -- label=player && frame=buff (ClassicAPI: weapon-enchant buffs)
-  f:RegisterEvent("PARTY_MEMBERS_CHANGED") -- label=party, frame=leaderIcon
-  f:RegisterEvent("PARTY_LEADER_CHANGED") -- frame=leaderIcon
-  f:RegisterEvent("RAID_ROSTER_UPDATE") -- label=raidIcon
-  f:RegisterEvent("PLAYER_UPDATE_RESTING") -- label=restIcon
-  f:RegisterEvent("PLAYER_TARGET_CHANGED") -- label=target
-  f:RegisterEvent("PARTY_LOOT_METHOD_CHANGED") -- frame=lootIcon
-  f:RegisterEvent("RAID_TARGET_UPDATE") -- frame=raidIcon
-  f:RegisterEvent("UNIT_PET")
-  f:RegisterEvent("UNIT_HAPPINESS")
+  for event in pairs(f.idleevents) do
+    f:RegisterEvent(event)
+  end
+  if f:IsShown() then RegisterShownEvents(f) end
 
   f:RegisterForClicks('LeftButtonUp', 'RightButtonUp',
     'MiddleButtonUp', 'Button4Up', 'Button5Up')
@@ -1521,6 +1572,7 @@ function pfUI.uf:EnableScripts()
   end
 
   f:SetScript("OnShow", pfUI.uf.OnShow)
+  f:SetScript("OnHide", pfUI.uf.OnHide)
   f:SetScript("OnEvent", pfUI.uf.OnEvent)
   f:SetScript("OnUpdate", pfUI.uf.OnUpdate)
 
@@ -1569,6 +1621,7 @@ function pfUI.uf:CreateUnitFrame(unit, id, config, tick)
   f.id = id
   f.config = config or pfUI_config.unitframes.fallback
   f.tick = tick
+  f.idleevents = GetIdleEvents(f.label, fname)
 
   CreateBackdropShadow(f)
 
@@ -2650,6 +2703,7 @@ function pfUI.uf:AddIcon(frame, pos, icon, timeleft, stacks, start, duration)
   local position = frame.config.indicator_pos or "TOPLEFT"
   local iconsize = tonumber(frame.config.indicator_size)
   local spacing = tonumber(frame.config.indicator_spacing)
+  local config = frame.config
 
   if not frame.hp then return end
   local frame = frame.hp.bar
@@ -2668,7 +2722,7 @@ function pfUI.uf:AddIcon(frame, pos, icon, timeleft, stacks, start, duration)
     frame.icon[pos].stacks:SetJustifyH("RIGHT")
     frame.icon[pos].stacks:SetJustifyV("BOTTOM")
 
-    frame.icon[pos].cd = CreateCooldown(frame.icon[pos], "indicator")
+    frame.icon[pos].cd = CreateCooldown(frame.icon[pos], "aura", config, "indicator_timers")
     frame.icon[pos].cd:SetFrameLevel(48)
   end
 
