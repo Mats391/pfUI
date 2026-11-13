@@ -362,6 +362,7 @@ pfUI.events:RegisterFrameEventAndCallback("UNIT_TARGET", function(_, unit)
   NoteAttacker(unit)
   -- the new target may have come into view mid-fight
   NoteAttacker(unit .. "target")
+  NoteAttacker(unit .. "targettarget")
 end)
 pfUI.events:RegisterFrameEventAndCallback("PLAYER_TARGET_CHANGED", function() NoteAttacker("target") end)
 pfUI.events:RegisterFrameEventAndCallback("PLAYER_FOCUS_CHANGED", function() NoteAttacker("focus") end)
