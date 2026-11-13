@@ -101,7 +101,7 @@ pfUI:RegisterModule("firstrun", function ()
     f.next:SetWidth(80)
     f.next:SetHeight(20)
     f.next:SetPoint("BOTTOMLEFT", f.progress.backdrop, "BOTTOMRIGHT", 8, 0)
-    f.next:SetText(T["Next"])
+    f.next:SetText(NEXT)
     f.next:SetScript("OnClick", function()
       if f.NextScript then f.NextScript() end
       pfUI_init[f.name] = true
@@ -114,7 +114,7 @@ pfUI:RegisterModule("firstrun", function ()
     f.abort:SetWidth(80)
     f.abort:SetHeight(20)
     f.abort:SetPoint("BOTTOMRIGHT", f.progress.backdrop, "BOTTOMLEFT", -8, 0)
-    f.abort:SetText(T["Cancel"])
+    f.abort:SetText(CANCEL)
     f.abort:SetScript("OnClick", function()
       f:Hide()
     end)
@@ -136,56 +136,43 @@ pfUI:RegisterModule("firstrun", function ()
     local f = CreateFirstRunPage()
     f.text:SetText(T["A new installation of |cff33ffccpf|rUI ships with 4 prebuilt design profiles. Click below if you wish to load one of these profiles."])
 
+    local function LoadProfile(name)
+      _G["pfUI_config"] = CopyTable(pfUI_profiles[name])
+      pfUI_init.selected_profile = name
+      pfUI:LoadConfig()
+      ReloadUI()
+    end
+
     f.Modern = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.Modern:SetSize(120, 20)
     f.Modern:SetPoint("BOTTOM", -65, 100)
     f.Modern:SetTextColor(1,1,1)
-    f.Modern:SetText("Modern")
-    f.Modern:SetScript("OnClick", function()
-      _G["pfUI_config"] = CopyTable(pfUI_profiles["Modern"])
-      pfUI_init.selected_profile = "Modern"
-      pfUI:LoadConfig()
-      ReloadUI()
-    end)
+    f.Modern:SetText(T["Modern"])
+    f.Modern:SetScript("OnClick", function() LoadProfile("Modern") end)
     SkinButton(f.Modern)
 
     f.Nostalgia = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.Nostalgia:SetSize(120, 20)
     f.Nostalgia:SetPoint("BOTTOM", 65, 100)
     f.Nostalgia:SetTextColor(1,1,1)
-    f.Nostalgia:SetText("Nostalgia")
-    f.Nostalgia:SetScript("OnClick", function()
-      _G["pfUI_config"] = CopyTable(pfUI_profiles["Nostalgia"])
-      pfUI_init.selected_profile = "Nostalgia"
-      pfUI:LoadConfig()
-      ReloadUI()
-    end)
+    f.Nostalgia:SetText(T["Nostalgia"])
+    f.Nostalgia:SetScript("OnClick", function() LoadProfile("Nostalgia") end)
     SkinButton(f.Nostalgia)
 
     f.Legacy = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.Legacy:SetSize(120, 20)
     f.Legacy:SetPoint("BOTTOM", 65, 75)
     f.Legacy:SetTextColor(1,1,1)
-    f.Legacy:SetText("Legacy")
-    f.Legacy:SetScript("OnClick", function()
-      _G["pfUI_config"] = CopyTable(pfUI_profiles["Legacy"])
-      pfUI_init.selected_profile = "Legacy"
-      pfUI:LoadConfig()
-      ReloadUI()
-    end)
+    f.Legacy:SetText(T["Legacy"])
+    f.Legacy:SetScript("OnClick", function() LoadProfile("Legacy") end)
     SkinButton(f.Legacy)
 
     f.Slim = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.Slim:SetSize(120, 20)
     f.Slim:SetPoint("BOTTOM", -65, 75)
     f.Slim:SetTextColor(1,1,1)
-    f.Slim:SetText("Slim")
-    f.Slim:SetScript("OnClick", function()
-      _G["pfUI_config"] = CopyTable(pfUI_profiles["Slim"])
-      pfUI_init.selected_profile = "Slim"
-      pfUI:LoadConfig()
-      ReloadUI()
-    end)
+    f.Slim:SetText(T["Slim"])
+    f.Slim:SetScript("OnClick", function() LoadProfile("Slim") end)
     SkinButton(f.Slim)
 
     f.Slider = CreateFrame("Slider", "pfFirstRunWizardScaleSlider", f, "OptionsSliderTemplate")
@@ -196,14 +183,14 @@ pfUI:RegisterModule("firstrun", function ()
     f.Slider:SetSize(240, 20)
     f.Slider:SetPoint("BOTTOM", 0, 50)
     f.Slider:SetOrientation('HORIZONTAL')
-    f.Slider:SetMinMaxValues(0.5, 2.0)
+    -- the game drops a uiScale under 0.64 for its automatic scale at login
+    f.Slider:SetMinMaxValues(0.64, 2.0)
     f.Slider:SetValue(UIParent:GetScale())
 
     f.Slider:SetScript("OnMouseUp", function()
       local scale = round(this:GetValue(),2)
       SetCVar("uiScale", scale)
       SetCVar("useUiScale", 1)
-      UIParent:SetScale(scale)
       this:SetValue(scale)
     end)
 
@@ -258,7 +245,7 @@ pfUI:RegisterModule("firstrun", function ()
     SkinCheckbox(f.checkbox, 18)
 
     f.NextScript = function()
-      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") return end
+      if not pfUI.chat then message(T["Couldn't apply settings. Chat module is disabled."]) return end
       pfUI.chat.SetupRightChat(f.checkbox:GetChecked())
     end
 
@@ -278,7 +265,7 @@ pfUI:RegisterModule("firstrun", function ()
     SkinCheckbox(f.checkbox, 18)
 
     f.NextScript = function()
-      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") return end
+      if not pfUI.chat then message(T["Couldn't apply settings. Chat module is disabled."]) return end
       if f.checkbox:GetChecked() then
         pfUI.chat.SetupPositions()
       end
@@ -300,7 +287,7 @@ pfUI:RegisterModule("firstrun", function ()
     SkinCheckbox(f.checkbox, 18)
 
     f.NextScript = function()
-      if not pfUI.chat then message("Couldn't apply settings. Chat module is disabled.") return end
+      if not pfUI.chat then message(T["Couldn't apply settings. Chat module is disabled."]) return end
       if f.checkbox:GetChecked() then
         pfUI.chat.SetupChannels()
       end

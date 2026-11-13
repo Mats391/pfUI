@@ -6,13 +6,6 @@ pfUI:RegisterModule("bags", function ()
     [1804] = {frame="picklock"},
   }
 
-  local function BagSortOpts()
-    return {
-      reverse     = C.appearance.bags.sortreverse == "1",
-      reversePrio = C.appearance.bags.sortprioreverse == "1",
-    }
-  end
-
   -- function to detect openable items in inventory
   local openable = { bag = nil, slot = nil, icon = nil }
   local function GetNextOpenable()
@@ -89,42 +82,56 @@ pfUI:RegisterModule("bags", function ()
 
   pfUI.bag.delay = { UpdateBag = {} }
 
-  pfUI.bag:SetScript("OnUpdate", function()
-    -- update delayed ones every 0.1s
-    if ( this.tick or 1) > GetTime() then return else this.tick = GetTime() + .1 end
+  -- run the updates queued by events, batched into one pass per 0.1s
+  local function FlushDelayed()
+    local delay = pfUI.bag.delay
+    delay.pending = nil
 
-    if this.delay.RefreshSpells then
-      this.delay.RefreshSpells = nil
+    if delay.RefreshSpells then
+      delay.RefreshSpells = nil
       pfUI.bag:RefreshSpells()
     end
 
-    if this.delay.CheckFullUpdate then
-      this.delay.CheckFullUpdate = nil
+    if delay.CheckFullUpdate then
+      delay.CheckFullUpdate = nil
       pfUI.bag:CheckFullUpdate()
     end
 
-    if this.delay.UpdateCooldowns then
-      this.delay.UpdateCooldowns = nil
+    if delay.UpdateCooldowns then
+      delay.UpdateCooldowns = nil
       pfUI.bag:UpdateCooldowns()
     end
 
-    if this.delay.UpdateItemLock then
-      this.delay.UpdateItemLock = nil
+    if delay.UpdateItemLock then
+      delay.UpdateItemLock = nil
       pfUI.bag:UpdateItemLock()
     end
 
-    if this.delay.UpdateSearch then
-      this.delay.UpdateSearch = nil
+    if delay.UpdateSearch then
+      delay.UpdateSearch = nil
       pfUI.bag:UpdateSearch()
     end
 
-    for bag in pairs(this.delay.UpdateBag) do
-      this.delay.UpdateBag[bag] = nil
+    for bag in pairs(delay.UpdateBag) do
+      delay.UpdateBag[bag] = nil
       pfUI.bag:UpdateBag(bag)
     end
-  end)
+  end
+
+  local function ScheduleFlush()
+    if pfUI.bag.delay.pending then return end
+    pfUI.bag.delay.pending = true
+    C_Timer.After(.1, FlushDelayed)
+  end
+
+  function pfUI.bag:QueueBagUpdate(bag)
+    self.delay.UpdateBag[bag] = true
+    ScheduleFlush()
+  end
 
   pfUI.bag:SetScript("OnEvent", function()
+    ScheduleFlush()
+
     if event == "PLAYER_ENTERING_WORLD" then
       pfUI.bag:CreateBags()
       pfUI.bag.right:Hide()
@@ -349,7 +356,7 @@ pfUI:RegisterModule("bags", function ()
         chat:Hide()
       end
       if C.appearance.bags.autoSortOnOpen == "1" then
-        libbagsort:Sort({0, 1, 2, 3, 4}, BagSortOpts())
+        C_Container.SortBags()
       end
       pfUI.bag:CreateBags(object)
       PlaySound("INTERFACESOUND_BACKPACKOPEN")
@@ -983,7 +990,7 @@ pfUI:RegisterModule("bags", function ()
         end)
 
         frame.sort:SetScript("OnClick", function()
-          libbagsort:Sort({0, 1, 2, 3, 4}, BagSortOpts())
+          C_Container.SortBags()
         end)
       end
 
@@ -1022,7 +1029,7 @@ pfUI:RegisterModule("bags", function ()
 
         frame.search.edit:SetFont(pfUI.font_default, C.global.font_size, "OUTLINE")
         frame.search.edit:SetAutoFocus(false)
-        frame.search.edit:SetText(T["Search"])
+        frame.search.edit:SetText(SEARCH)
         frame.search.edit:SetTextColor(.5,.5,.5,1)
 
         frame.search.edit:SetScript("OnEditFocusGained", function()
@@ -1030,12 +1037,12 @@ pfUI:RegisterModule("bags", function ()
         end)
 
         frame.search.edit:SetScript("OnEditFocusLost", function()
-          this:SetText(T["Search"])
+          this:SetText(SEARCH)
           C_Container.SetItemSearch("")
         end)
 
         frame.search.edit:SetScript("OnTextChanged", function()
-          if this:GetText() == T["Search"] then return end
+          if this:GetText() == SEARCH then return end
           C_Container.SetItemSearch(this:GetText())
         end)
 
@@ -1050,7 +1057,7 @@ pfUI:RegisterModule("bags", function ()
         end)
 
         frame.search:SetScript("OnHide", function()
-          frame.search.edit:SetText(T["Search"])
+          frame.search.edit:SetText(SEARCH)
           C_Container.SetItemSearch("")
         end)
       end
@@ -1149,7 +1156,7 @@ pfUI:RegisterModule("bags", function ()
         end)
 
         frame.sort:SetScript("OnClick", function()
-          libbagsort:Sort({-1, 5, 6, 7, 8, 9, 10}, BagSortOpts())
+          C_Container.SortBankBags()
         end)
       end
     end

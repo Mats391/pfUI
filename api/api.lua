@@ -592,6 +592,49 @@ function pfUI.api.HookAddon(addon, func)
   end)
 end
 
+-- [ HookAddonOrVariable ]
+-- Compatibility shim for pfUI plugins (e.g. pfUI-addonskinner) that still
+-- call the pre-rewrite API. Routes addon names through HookAddon, and keeps
+-- the legacy "or variable" fallback for callers that pass a global name.
+-- Pending variable hooks share one ADDON_LOADED/PLAYER_LOGIN listener on
+-- pfUI.events, which unregisters once every hook has run.
+local variableHooks, variableHandles = {}, nil
+
+local function DrainVariableHooks()
+  local ready = {}
+  for name in pairs(variableHooks) do
+    if _G[name] then table.insert(ready, name) end
+  end
+  -- run after the scan: a hook may queue another and grow the table
+  for _, name in ipairs(ready) do
+    local funcs = variableHooks[name]
+    variableHooks[name] = nil
+    for _, func in ipairs(funcs) do func() end
+  end
+  if variableHandles and not next(variableHooks) then
+    for _, handle in ipairs(variableHandles) do handle:Unregister() end
+    variableHandles = nil
+  end
+end
+
+function pfUI.api.HookAddonOrVariable(addon, func)
+  if C_AddOns.DoesAddOnExist(addon) then
+    return pfUI.api.HookAddon(addon, func)
+  end
+  if IsLoggedIn() and _G[addon] then return func() end
+
+  variableHooks[addon] = variableHooks[addon] or {}
+  table.insert(variableHooks[addon], func)
+
+  if not variableHandles then
+    variableHandles = {
+      pfUI.events:RegisterFrameEventAndCallbackWithHandle("ADDON_LOADED", DrainVariableHooks),
+      pfUI.events:RegisterFrameEventAndCallbackWithHandle("PLAYER_LOGIN", DrainVariableHooks),
+    }
+  end
+end
+_G.HookAddonOrVariable = pfUI.api.HookAddonOrVariable
+
 -- [ Create Gold String ]
 -- Transforms a amount of copper into a fully fledged gold string
 -- 'money'      [int]           the amount of coppy (GetMoney())
@@ -751,25 +794,40 @@ end
 -- 'anchor'     [frame]     the frame where it should be aligned to
 -- 'position'   [string]    where it should appear, takes the following:
 --                          "TOP", "RIGHT", "BOTTOM", "LEFT"
+local alignments = {
+  --         frame corners                anchor corners                spacing x/y
+  TOP    = { "BOTTOMLEFT", "BOTTOMRIGHT", "TOPLEFT",    "TOPRIGHT",     0,  1 },
+  RIGHT  = { "TOPLEFT",    "BOTTOMLEFT",  "TOPRIGHT",   "BOTTOMRIGHT",  1,  0 },
+  BOTTOM = { "TOPLEFT",    "TOPRIGHT",    "BOTTOMLEFT", "BOTTOMRIGHT",  0, -1 },
+  LEFT   = { "TOPRIGHT",   "BOTTOMRIGHT", "TOPLEFT",    "BOTTOMLEFT",  -1,  0 },
+}
+
 function pfUI.api.AlignToPosition(frame, anchor, position, spacing)
   if frame == anchor then return end
   frame:ClearAllPoints()
-  if position == "TOP" and anchor then
-    frame:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, (spacing or 0))
-    frame:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, (spacing or 0))
-  elseif position == "RIGHT" and anchor then
-    frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", (spacing or 0), 0)
-    frame:SetPoint("BOTTOMLEFT", anchor, "BOTTOMRIGHT", (spacing or 0), 0)
-  elseif position == "BOTTOM" and anchor then
-    frame:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -(spacing or 0))
-    frame:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -(spacing or 0))
-  elseif position == "LEFT" and anchor then
-    frame:SetPoint("TOPRIGHT", anchor, "TOPLEFT", -(spacing or 0), 0)
-    frame:SetPoint("BOTTOMRIGHT", anchor, "BOTTOMLEFT", -(spacing or 0), 0)
-  else
-    frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
-    frame:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 0, 0)
+
+  local align = anchor and alignments[position]
+  if not align then
+    -- no usable anchor: stretch along the right screen edge
+    frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT")
+    frame:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT")
+    return
   end
+
+  local point1, point2, rel1, rel2, dx, dy = unpack(align)
+  local x, y = dx * (spacing or 0), dy * (spacing or 0)
+  frame:SetPoint(point1, anchor, rel1, x, y)
+  frame:SetPoint(point2, anchor, rel2, x, y)
+end
+
+-- Splits the screen into a 3x3 grid and returns the cell that (x, y) falls in
+-- as a row ("TOP", "" or "BOTTOM") and a column ("LEFT", "" or "RIGHT").
+local function GetScreenCell(x, y, scale)
+  local w = GetScreenWidth()  / scale / 3
+  local h = GetScreenHeight() / scale / 3
+  local row = y > 2 * h and "TOP" or y < h and "BOTTOM" or ""
+  local col = x < w and "LEFT" or x > 2 * w and "RIGHT" or ""
+  return row, col
 end
 
 -- [ SetAutoPoint ]
@@ -779,67 +837,22 @@ end
 -- 'spacing'    [number]       the padding that should be used between the
 --                             frame and its parent frame
 function pfUI.api.SetAutoPoint(frame, parent, spacing)
-  --[[
-
-          a     b       max
-    +-----------------+
-    |  1  |  2  |  3  |
-    |-----+-----+-----| c
-    |  4  |  5  |  6  |
-    |-----+-----+-----| d
-    |  7  |  8  |  9  |
-    +-----------------+
-  0
-
-  ]]--
-
-  local a = GetScreenWidth() / 3
-  local b = GetScreenWidth() / 3 * 2
-
-  local c = GetScreenHeight() / 3 * 2
-  local d = GetScreenHeight() / 3
-
   local x, y = parent:GetCenter()
+  if not x then return end
 
-  if not x or not y then return end
-
+  -- open the frame toward the screen center
+  local row, col = GetScreenCell(x, y, 1)
   local off = spacing or 0
 
   frame:ClearAllPoints()
-
-  if x < a and y > c then
-    -- TOPLEFT
-    frame:SetPoint("TOPLEFT", parent, "BOTTOMLEFT", 0, -off)
-  elseif x > a and x < b and y > c then
-    -- TOP
-    frame:SetPoint("TOP", parent, "BOTTOM", 0, -off)
-  elseif x > b and y > c then
-    -- TOPRIGHT
-    frame:SetPoint("TOPRIGHT", parent, "BOTTOMRIGHT", 0, -off)
-
-  elseif x < a and y > d and y < c then
-    -- LEFT
+  if row == "TOP" then
+    frame:SetPoint("TOP" .. col, parent, "BOTTOM" .. col, 0, -off)
+  elseif row == "" and col == "LEFT" then
     frame:SetPoint("LEFT", parent, "RIGHT", off, 0)
-
-  elseif x > a and x < b and y > d and y < c then
-    -- CENTER
-    frame:SetPoint("BOTTOM", parent, "TOP", 0, off)
-
-  elseif x > b and y > d and y < c then
-    -- RIGHT
+  elseif row == "" and col == "RIGHT" then
     frame:SetPoint("RIGHT", parent, "LEFT", -off, 0)
-
-  elseif x < a and y < d then
-    -- BOTTOMLEFT
-    frame:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", 0, off)
-
-  elseif x > a and x < b and y < d then
-    -- BOTTOM
-    frame:SetPoint("BOTTOM", parent, "TOP", 0, off)
-
-  elseif x > b and y < d then
-    -- BOTTOMRIGHT
-    frame:SetPoint("BOTTOMRIGHT", parent, "TOPRIGHT", 0, off)
+  else
+    frame:SetPoint("BOTTOM" .. col, parent, "TOP" .. col, 0, off)
   end
 end
 
@@ -848,33 +861,12 @@ end
 -- 'self'       [frame]        the frame that should be checked
 -- returns:     [string]       the name of the best anchor
 function pfUI.api.GetBestAnchor(self)
-  local scale = self:GetScale()
   local x, y = self:GetCenter()
-  local a = GetScreenWidth()  / scale / 3
-  local b = GetScreenWidth()  / scale / 3 * 2
-  local c = GetScreenHeight() / scale / 3 * 2
-  local d = GetScreenHeight() / scale / 3
-  if not x or not y then return end
+  if not x then return end
 
-  if x < a and y > c then
-    return "TOPLEFT"
-  elseif x > a and x < b and y > c then
-    return "TOP"
-  elseif x > b and y > c then
-    return "TOPRIGHT"
-  elseif x < a and y > d and y < c then
-    return "LEFT"
-  elseif x > a and x < b and y > d and y < c then
-    return "CENTER"
-  elseif x > b and y > d and y < c then
-    return "RIGHT"
-  elseif x < a and y < d then
-    return "BOTTOMLEFT"
-  elseif x > a and x < b and y < d then
-    return "BOTTOM"
-  elseif x > b and y < d then
-    return "BOTTOMRIGHT"
-  end
+  local row, col = GetScreenCell(x, y, self:GetScale())
+  local anchor = row .. col
+  return anchor ~= "" and anchor or "CENTER"
 end
 
 -- [ ConvertFrameAnchor ]
@@ -883,31 +875,23 @@ end
 -- 'anchor'     [string]       the new anchor that shall be used
 -- returns:     anchor, x, y   can directly be used in SetPoint()
 function pfUI.api.ConvertFrameAnchor(self, anchor)
-  local scale, x, y, _ = self:GetScale(), nil, nil, nil
+  local scale = self:GetScale()
+  local w, h = GetScreenWidth() / scale, GetScreenHeight() / scale
 
-  if anchor == "CENTER" then
-    x, y = self:GetCenter()
-    x, y = x - GetScreenWidth()/2/scale, y - GetScreenHeight()/2/scale
-  elseif anchor == "TOPLEFT" then
-    x, y = self:GetLeft(), self:GetTop() - GetScreenHeight()/scale
-  elseif anchor == "TOP" then
-    x, _ = self:GetCenter()
-    x, y = x - GetScreenWidth()/2/scale, self:GetTop() - GetScreenHeight()/scale
-  elseif anchor == "TOPRIGHT" then
-    x, y = self:GetRight() - GetScreenWidth()/scale, self:GetTop() - GetScreenHeight()/scale
-  elseif anchor == "RIGHT" then
-    _, y = self:GetCenter()
-    x, y = self:GetRight() - GetScreenWidth()/scale, y - GetScreenHeight()/2/scale
-  elseif anchor == "BOTTOMRIGHT" then
-    x, y = self:GetRight() - GetScreenWidth()/scale, self:GetBottom()
-  elseif anchor == "BOTTOM" then
-    x, _ = self:GetCenter()
-    x, y = x - GetScreenWidth()/2/scale, self:GetBottom()
-  elseif anchor == "BOTTOMLEFT" then
-    x, y = self:GetLeft(), self:GetBottom()
-  elseif anchor == "LEFT" then
-    _, y = self:GetCenter()
-    x, y = self:GetLeft(), y - GetScreenHeight()/2/scale
+  -- offsets from the matching point of the screen, axis by axis
+  local x, y = self:GetCenter()
+  x, y = x - w / 2, y - h / 2
+
+  if anchor:find("LEFT") then
+    x = self:GetLeft()
+  elseif anchor:find("RIGHT") then
+    x = self:GetRight() - w
+  end
+
+  if anchor:find("TOP") then
+    y = self:GetTop() - h
+  elseif anchor:find("BOTTOM") then
+    y = self:GetBottom()
   end
 
   return anchor, round(x, 2), round(y, 2)
@@ -1002,28 +986,53 @@ function pfUI.api.GetBorderSize(pref)
   end
 end
 
+-- The scale UIParent ends up with: one UI unit per screen pixel when pixel
+-- perfect, else the game's own. The game applies its scale only after the
+-- add-ons and their saved variables are loaded (CGGameUI::Initialize ends in
+-- OnDisplaySizeChanged), so at load time it is worked out from the same
+-- options and rules: uiScale while useUiScale is on and it is at least 0.64,
+-- else 768 over the window height kept within 0.9 and 1. Windows narrower
+-- than 4:3 cap either at 3/4 of their aspect.
+local function GetUIScale()
+  if pfUI_config.global.pixelperfect == "1" then return PixelUtil.GetPixelToUIUnitFactor() end
+
+  local width, height = GetPhysicalScreenSize()
+  local aspect = GetCVar("widescreen") == "1" and width / height or 4/3
+  local function fit(scale)
+    return aspect < 4/3 and math.min(scale, aspect * .75) or scale
+  end
+
+  if GetCVar("useUiScale") == "1" then
+    local scale = fit(tonumber(GetCVar("uiScale")))
+    if scale >= .64 then return scale end
+  end
+
+  return math.max(fit(height > 768 and 768 / height or 1), .9)
+end
+
+-- [ UpdateUIScale ]
+-- Gives UIParent the pixel perfect scale when enabled, else leaves the game's
+-- own. The engine puts its own scale back on every window resize and scale
+-- option change, so this runs again on each UI_SCALE_CHANGED. Borders keep
+-- the pixel size they were built with, so a change of it offers a reload once.
+function pfUI.api.UpdateUIScale()
+  if pfUI_config.global.pixelperfect == "1" then
+    UIParent:SetScale(PixelUtil.GetPixelToUIUnitFactor())
+  end
+
+  if not pfUI.pixel or pfUI.scaleprompt then return end
+  if math.abs(PixelUtil.GetPixelToUIUnitFactor() / UIParent:GetScale() - pfUI.pixel) < .0001 then return end
+
+  pfUI.scaleprompt = true
+  CreateQuestionDialog(T["The UI-Scale has changed. Reload the UI to redraw the borders?"], ReloadUI)
+end
+
 -- [ GetPerfectPixel ]
--- Returns a number that equals a real pixel on regular scaled frames.
--- Respects the current UI-scale and calculates a real pixel based on
--- the screen resolution and the 768px sized drawlayer.
+-- Returns the size of one physical pixel in UIParent units.
 function pfUI.api.GetPerfectPixel()
   if pfUI.pixel then return pfUI.pixel end
 
-  if pfUI_config.appearance.border.pixelperfect == "1" then
-    local scale = GetCVar("useUiScale") == "1" and GetCVar("uiScale") or "1"
-    local resolution = GetCVar("gxResolution")
-    local _, _, screenwidth, screenheight = strfind(resolution, "(.+)x(.+)")
-
-    pfUI.pixel = 768 / screenheight / scale
-    pfUI.pixel = pfUI.pixel > 1 and 1 or pfUI.pixel
-
-    -- autodetect and zoom for HiDPI displays
-    if pfUI_config.appearance.border.hidpi == "1" then
-      pfUI.pixel = pfUI.pixel < .5 and pfUI.pixel * 2 or pfUI.pixel
-    end
-  else
-    pfUI.pixel = .7
-  end
+  pfUI.pixel = PixelUtil.GetPixelToUIUnitFactor() / GetUIScale()
 
   pfUI.backdrop = {
     bgFile = "Interface\\BUTTONS\\WHITE8X8", tile = false, tileSize = 0,
@@ -1168,8 +1177,11 @@ end
 -- [ Set Castbar Shield ]
 -- Colors a castbar for a cast that none of the player's own interrupts or
 -- silences can stop. The bar and the icon's border both take the shield color,
--- so the state still reads on a bar configured without an icon. Not shielded
--- restores the normal cast/channel color and the configured border.
+-- so the state still reads on a bar configured without an icon. The fill also
+-- gets diagonal stripes, tiled at the image's own size so they keep their
+-- spacing as the fill grows or shrinks. They sit on OVERLAY, under the bar's
+-- text on the same layer. Not shielded restores the normal cast/channel color
+-- and the configured border.
 -- 'bar'        [frame]     the castbar statusbar
 -- 'icon'       [frame]     the icon frame, or nil for a bar without one
 -- 'shielded'   [bool]      whether the cast is uninterruptible
@@ -1179,6 +1191,18 @@ function pfUI.api.SetCastbarShield(bar, icon, shielded, isChannel)
     bar:SetStatusBarColor(pfUI.api.GetStringColor(C.appearance.castbar.shieldcolor))
   else
     bar:SetStatusBarColor(pfUI.api.GetStringColor(C.appearance.castbar[isChannel and "channelcolor" or "castbarcolor"]))
+  end
+
+  if shielded and not bar.shieldstripes then
+    bar.shieldstripes = bar:CreateTexture(nil, "OVERLAY")
+    bar.shieldstripes:SetTexture(pfUI.media["img:stripes"])
+    bar.shieldstripes:SetHorizTile(true)
+    bar.shieldstripes:SetVertTile(true)
+    bar.shieldstripes:SetVertexColor(1, 1, 1, .3)
+    bar.shieldstripes:SetAllPoints(bar:GetStatusBarTexture())
+  end
+  if bar.shieldstripes then
+    bar.shieldstripes:SetShown(shielded)
   end
 
   local iconborder = icon and icon.backdrop
@@ -1374,10 +1398,10 @@ function pfUI.api.EnableAutohide(frame, timeout, combat)
 
   if not frame.hover.fade then
     frame.hover.fade = frame:CreateAnimationGroup()
+    frame.hover.fade:SetToFinalAlpha(true)
     local fade = frame.hover.fade:CreateAnimation("Alpha")
     fade:SetChange(-1)
     fade:SetDuration(1)
-    frame.hover.fade:SetScript("OnFinished", function() frame:SetAlpha(0) end)
   end
 
   if combat then
@@ -1471,63 +1495,41 @@ function pfUI.api.GetColorGradient(perc)
 end
 
 -- [ GetNoNameObject ] --
--- 'frame'      [string]       parent frame
--- 'scantype'   [string]       scanning Region or Children
--- 'objtype'    [string]
--- 'layer'      [string]
--- 'arg1'       [string]
+-- Finds the first unnamed region or child of a frame that matches the filters
+-- 'frame'      [frame]        parent frame
+-- 'objtype'    [string]       "Texture", "FontString" or "Button"
+-- 'layer'      [string]       draw layer of a region (optional)
+-- 'arg1'       [string]       substring of the texture path (Texture, Button)
+--                             or the text (FontString) (optional)
+-- 'arg2'       [string]       substring of a button's text (optional)
 -- return object
+
+-- a missing value or filter counts as a match
+local function Matches(value, needle)
+  return not needle or not value or value:find(needle, 1, true)
+end
+
 function pfUI.api.GetNoNameObject(frame, objtype, layer, arg1, arg2)
   -- A nil/non-frame parent otherwise dies on frame:GetRegions()/:GetChildren()
-  -- below, and the traceback stops here — useless, since all callers share this
-  -- line. pfUI shadows Lua's `error` (dropping the level arg and not throwing),
-  -- so fold the caller frame in via debugstack to name the offending skin, then
-  -- bail so we don't fall through and crash on frame:GetRegions() anyway.
+  -- below, where the message would name this line, shared by every caller;
+  -- level 2 names the offending skin instead.
   if type(frame) ~= "table" or not frame.GetRegions then
-    error("GetNoNameObject: invalid parent frame\n" .. debugstack(2, 3, 0))
-    return
+    error("GetNoNameObject: invalid parent frame", 2)
   end
 
-  local arg1 = arg1 and gsub(arg1, "([%+%-%*%(%)%?%[%]%^])", "%%%1")
-  local arg2 = arg2 and gsub(arg2, "([%+%-%*%(%)%?%[%]%^])", "%%%1")
-
-  local objects
-  if objtype == "Texture" or objtype == "FontString" then
-    objects = {frame:GetRegions()}
-  else
-    objects = {frame:GetChildren()}
-  end
+  local isRegion = objtype == "Texture" or objtype == "FontString"
+  local objects = isRegion and { frame:GetRegions() } or { frame:GetChildren() }
 
   for _, object in ipairs(objects) do
-    local check = true
-    if object:GetObjectType() ~= objtype or (layer and object:GetDrawLayer() ~= layer) then check = false end
-
-    if check then
-      if objtype == "Texture" and object.SetTexture and object:GetTexture() ~= "Interface\\BUTTONS\\WHITE8X8" then
-        if arg1 then
-          local texture = object:GetTexture()
-          if texture and not string.find(texture, arg1, 1) then check = false end
-        end
-
-        if check then return object end
-      elseif objtype == "FontString" and object.SetText then
-        if arg1 then
-          local text = object:GetText()
-          if text and not string.find(text, arg1, 1) then check = false end
-        end
-
-        if check then return object end
-      elseif objtype == "Button" and object.GetNormalTexture and object:GetNormalTexture() then
-        if arg1 then
-          local texture = object:GetNormalTexture():GetTexture()
-          if texture and not string.find(texture, arg1, 1) then check = false end
-        end
-        if arg2 then
-          local text = object:GetText()
-          if text and not string.find(text, arg2, 1) then check = false end
-        end
-
-        if check then return object end
+    if object:GetObjectType() == objtype and (not layer or object:GetDrawLayer() == layer) then
+      if objtype == "Texture" then
+        local texture = object:GetTexture()
+        if texture ~= "Interface\\BUTTONS\\WHITE8X8" and Matches(texture, arg1) then return object end
+      elseif objtype == "FontString" then
+        if Matches(object:GetText(), arg1) then return object end
+      elseif objtype == "Button" then
+        local normal = object:GetNormalTexture()
+        if normal and Matches(normal:GetTexture(), arg1) and Matches(object:GetText(), arg2) then return object end
       end
     end
   end

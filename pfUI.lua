@@ -21,13 +21,16 @@ pfUI:RegisterEvent("ADDON_LOADED")
 -- setup bootvar
 pfUI.bootup = true
 
+-- the flavor TOCs set LoadSavedVariablesFirst, so the SavedVariables are
+-- already loaded here. A save file can hold `pfUI_config = nil` (the client
+-- writes unset variables that way after a session without the ClassicAPI DLL,
+-- where pfUI.toc loads only API_Check.lua), so default every one of them.
 pfUI_playerDB = pfUI_playerDB or {}
 pfUI_config = pfUI_config or {}
 pfUI_init = pfUI_init or {}
 pfUI_profiles = pfUI_profiles or {}
 pfUI_addon_profiles = pfUI_addon_profiles or {}
 pfUI_cache = pfUI_cache or {}
-pfUI_throttle = pfUI_throttle or {}
 
 -- localization
 pfUI_locale = {}
@@ -392,6 +395,10 @@ pfUI:SetScript("OnEvent", function()
     SetupConfigEnvironment()
     pfUI:UpdateFonts()
 
+    -- scale UIParent before the modules size their borders from it
+    pfUI.api.UpdateUIScale()
+    pfUI.events:RegisterFrameEventAndCallback("UI_SCALE_CHANGED", pfUI.api.UpdateUIScale)
+
     -- load modules
     for _, m in pairs(this.modules) do
       if not ( pfUI_config["disabled"] and pfUI_config["disabled"][m]  == "1" ) then
@@ -457,15 +464,20 @@ message = function(msg)
 end
 print = print or message
 
-error = function(msg)
-  if PF_DEBUG_MODE then message(debugstack()) end
-  if string.find(msg, "AddOns\\pfUI") then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffcc3333ERROR: |cffff5555".. (msg or "nil" ))
-  elseif not pfUI_config or (pfUI_config.global and pfUI_config.global.errors == "1") then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffcc3333ERROR: |cffff5555".. (msg or "nil" ))
+-- Errors print to chat: pfUI's own always, other addons' when the errors
+-- option is on. In debug mode the stack follows, starting at the code that
+-- raised the error rather than at this handler.
+seterrorhandler(function(msg)
+  msg = tostring(msg)
+  if PF_DEBUG_MODE then
+    local height = GetErrorCallstackHeight()
+    message(height and debugstack(GetCallstackHeight() - height + 1) or debugstack(2))
   end
-end
-seterrorhandler(error)
+  if string.find(msg, "AddOns\\pfUI") or not pfUI_config
+  or (pfUI_config.global and pfUI_config.global.errors == "1") then
+    DEFAULT_CHAT_FRAME:AddMessage("|cffcc3333ERROR: |cffff5555" .. msg)
+  end
+end)
 
 function pfUI.SetupCVars()
   ClearTutorials()

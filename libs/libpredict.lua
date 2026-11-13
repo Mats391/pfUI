@@ -36,6 +36,18 @@ local sentTargets = {}    -- [castGUID] = target name of an own cast, from UNIT_
 local resOffers = {}      -- [guid] = expiry of a landed resurrection the target has yet to accept
 local RES_OFFER_TIMEOUT = 60 -- the target's resurrect popup declines itself after 60s
 
+-- Tell the listeners of "libpredict:heals" that the heals on `target` (a
+-- name) changed, and again at `expiry`, when a heal that is never stopped
+-- drops out of UnitGetIncomingHeals.
+local function HealsChanged(target, expiry)
+  pfUI.events:TriggerEvent("libpredict:heals", target)
+  if expiry then
+    C_Timer.After(expiry - GetTime(), function()
+      pfUI.events:TriggerEvent("libpredict:heals", target)
+    end)
+  end
+end
+
 -- Localized spell names resolved once from canonical rank-1 spellIDs.
 -- Every rank shares the same name, so per-rank comparisons elsewhere can
 -- be done against these constants without per-locale or per-rank tables.
@@ -72,24 +84,53 @@ local function resolveNameFromGuid(guid)
   return nil
 end
 
--- Register with libdebuff hooks
+-- Group members by name: [name] = { unit = token, subgroup = n }. Outside a
+-- raid the whole party is subgroup 1.
+local roster = {}
+local PARTY_UNITS = { "player", "party1", "party2", "party3", "party4" }
+
+local function rosterAdd(name, unit, subgroup)
+  if not name then return end
+  roster[name] = { unit = unit, subgroup = subgroup }
+  local guid = UnitGUID(unit)
+  if guid then guidNameCache[guid] = name end
+end
+
+-- Rebuild the roster and cache every member's name while still reachable
 local function cacheRaidNames()
-  -- Cache all raid/party members while they are still reachable
-  for i = 1, GetNumRaidMembers() do
-    local unit = "raid" .. i
-    local guid = UnitGUID(unit)
-    local name = UnitName(unit)
-    if guid and name then guidNameCache[guid] = name end
+  wipe(roster)
+  if IsInRaid() then
+    for i = 1, GetNumRaidMembers() do
+      local name, _, subgroup = GetRaidRosterInfo(i)
+      rosterAdd(name, "raid" .. i, subgroup)
+    end
+  else
+    for _, unit in ipairs(PARTY_UNITS) do
+      rosterAdd(UnitName(unit), unit, 1)
+    end
   end
-  for i = 1, GetNumPartyMembers() do
-    local unit = "party" .. i
-    local guid = UnitGUID(unit)
-    local name = UnitName(unit)
-    if guid and name then guidNameCache[guid] = name end
+end
+
+-- Turtle's Prayer of Healing (target type TARGET_UNIT_FRIEND_AND_PARTY, radius
+-- 30) heals the subgroup of the player it is cast at, counting only members
+-- within 30 yards of that player. A self-cast, or a cast at someone outside our
+-- group, centers on the caster. Returns the names it will heal.
+local POH_RADIUS_SQ = 30 * 30
+local function PrayerOfHealingTargets(target, caster)
+  local center = roster[target] or roster[caster]
+  local names = {}
+  if not center then return names end
+  local cy, cx, cz = UnitPosition(center.unit)
+  if not cy then return names end
+  for name, member in pairs(roster) do
+    if member.subgroup == center.subgroup and not UnitIsDeadOrGhost(member.unit) then
+      local y, x, z = UnitPosition(member.unit)
+      if y and Vector3D_GetLengthSquared(Vector3D_Subtract(y, x, z, cy, cx, cz)) <= POH_RADIUS_SQ then
+        table.insert(names, name)
+      end
+    end
   end
-  -- player self
-  local pguid = UnitGUID("player")
-  if pguid then guidNameCache[pguid] = UnitName("player") end
+  return names
 end
 
 -- Build cache on world enter
@@ -135,50 +176,12 @@ local function OnOwnCastStart(spellId, castGUID)
     local casttime = castTime
 
     if spellName == PRAYER_OF_HEALING then
-      -- target is already correctly set from spell_queue[3]:
-      -- selfcast (ALT) = player, otherwise = current target
-      -- Use this to find the correct group to heal
-      local pohTarget = target or player
-      if IsInRaid() then
-        -- Raid: find pohTarget's subgroup and heal only those members
-        -- (Turtle WoW changed PoH to heal the target's group, not the caster's group)
-        local targetGroup
-        for i = 1, GetNumRaidMembers() do
-          local name, _, subgroup = GetRaidRosterInfo(i)
-          if name == pohTarget then targetGroup = subgroup break end
-        end
-        -- Fallback to caster's own group if target not in raid
-        if not targetGroup then
-          for i = 1, GetNumRaidMembers() do
-            local name, _, subgroup = GetRaidRosterInfo(i)
-            if name == player then targetGroup = subgroup break end
-          end
-        end
-        if targetGroup then
-          for i = 1, GetNumRaidMembers() do
-            local name, _, subgroup = GetRaidRosterInfo(i)
-            if subgroup == targetGroup then
-              libpredict:Heal(player, name, amount, casttime)
-              libpredict.sender:SendHealCommMsg("Heal/" .. name .. "/" .. amount .. "/" .. casttime .. "/")
-              libpredict.sender.healing = true
-            end
-          end
-        end
-      else
-        -- Party: heal all party members including self
-        libpredict:Heal(player, player, amount, casttime)
-        libpredict.sender:SendHealCommMsg("Heal/" .. player .. "/" .. amount .. "/" .. casttime .. "/")
+      for _, name in ipairs(PrayerOfHealingTargets(target, player)) do
+        libpredict:Heal(player, name, amount, casttime)
+        libpredict.sender:SendHealCommMsg("Heal/" .. name .. "/" .. amount .. "/" .. casttime .. "/")
         libpredict.sender.healing = true
-        for i = 1, 4 do
-          if CheckInteractDistance("party"..i, 4) then
-            local pname = UnitName("party"..i)
-            libpredict:Heal(player, pname, amount, casttime)
-            libpredict.sender:SendHealCommMsg("Heal/" .. pname .. "/" .. amount .. "/" .. casttime .. "/")
-            libpredict.sender.healing = true
-          end
-        end
       end
-      return  -- skip the generic Heal call below
+      return
     end
 
     libpredict:Heal(player, target, amount, casttime)
@@ -237,8 +240,8 @@ local function OnOtherCastStart(unit, spellId)
   local casterName = resolveNameFromGuid(casterGuid)
   if not casterName then return end
 
-  local targetName = UnitSpellTargetName(unit)
-  if not targetName then return end
+  -- A self-cast carries no unit target; the server then heals the caster
+  local targetName = UnitSpellTargetName(unit) or casterName
 
   -- Heal cast: look up cached amount from a previous cast by this healer
   local _, _, _, startMs, endMs = C_Spell.UnitCastingInfo(unit)
@@ -251,37 +254,9 @@ local function OnOtherCastStart(unit, spellId)
   local amount = foreignCache[casterName] and foreignCache[casterName][spellKey]
   if not amount then return end  -- no data yet, skip until we have a real value
 
-  -- Prayer of Healing: heal entire subgroup of the target
   if spellName == PRAYER_OF_HEALING then
-    if IsInRaid() then
-      local targetGroup
-      for i = 1, GetNumRaidMembers() do
-        local rname, _, subgroup = GetRaidRosterInfo(i)
-        if rname == targetName then targetGroup = subgroup break end
-      end
-      if not targetGroup then
-        for i = 1, GetNumRaidMembers() do
-          local rname, _, subgroup = GetRaidRosterInfo(i)
-          if rname == casterName then targetGroup = subgroup break end
-        end
-      end
-      if targetGroup then
-        for i = 1, GetNumRaidMembers() do
-          local rname, _, subgroup = GetRaidRosterInfo(i)
-          if subgroup == targetGroup then
-            libpredict:Heal(casterName, rname, amount, castTime, casterGuid)
-          end
-        end
-      end
-    else
-      -- Party: heal self + all members
-      libpredict:Heal(casterName, casterName, amount, castTime, casterGuid)
-      for i = 1, 4 do
-        local pname = UnitName("party" .. i)
-        if pname then
-          libpredict:Heal(casterName, pname, amount, castTime, casterGuid)
-        end
-      end
+    for _, name in ipairs(PrayerOfHealingTargets(targetName, casterName)) do
+      libpredict:Heal(casterName, name, amount, castTime, casterGuid)
     end
     return
   end
@@ -309,7 +284,7 @@ end
 local function RefreshResFrames(guid)
   for _, frame in pairs(pfUI.uf.frames) do
     if frame.unitstr and UnitGUID(frame.unitstr) == guid then
-      frame.update_indicators = true
+      pfUI.uf:QueueUpdate(frame, "indicators")
     end
   end
 end
@@ -439,7 +414,7 @@ function libpredict:ParseChatMessage(sender, msg)
     end
   elseif msgtype == "Hot" then
     -- Duplicate check: ignore same sender+target+spell within DUPLICATE_WINDOW
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = sender .. target .. heal
     if recentHots[key] and (now - recentHots[key]) < DUPLICATE_WINDOW then
       if libpredict.debug then
@@ -484,11 +459,11 @@ function libpredict:Heal(sender, target, amount, duration, senderGuid)
     return
   end
 
-  local now = pfUI.uf.now or GetTime()
-  local timeout = duration/1000 + now
+  local timeout = duration/1000 + GetTime()
   heals[target] = heals[target] or {}
   heals[target][sender] = { amount, timeout }
   if senderGuid then healGuidToName[senderGuid] = sender end
+  HealsChanged(target, timeout)
 end
 
 -- Debug flag
@@ -512,7 +487,7 @@ function libpredict:Hot(sender, target, spell, duration, startTime, source, rank
     local existingRank = tonumber(existing.rank) or 0
     local newRank = tonumber(rank) or 0
     
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local existingTimeleft = (existing.start + existing.duration) - now
     
     -- If existing HoT is still active and has higher rank, don't overwrite
@@ -525,7 +500,7 @@ function libpredict:Hot(sender, target, spell, duration, startTime, source, rank
     end
   end
 
-  local now = pfUI.uf.now or GetTime()
+  local now = GetTime()
   hots[target][spell].duration = duration
   hots[target][spell].start = startTime or now
   hots[target][spell].rank = rank -- Store rank for protection
@@ -544,7 +519,7 @@ function libpredict:Hot(sender, target, spell, duration, startTime, source, rank
   if pfUI and pfUI.uf and pfUI.uf.frames then
     for _, frame in pairs(pfUI.uf.frames) do
       if frame.namecache == target then
-        frame.update_aura = true
+        pfUI.uf:QueueUpdate(frame, "aura")
         if libpredict.debug then
           DEFAULT_CHAT_FRAME:AddMessage("  |cff00ff00-> Frame update triggered for " .. (frame:GetName() or "?") .. "|r")
         end
@@ -558,6 +533,7 @@ function libpredict:HealStop(sender)
     for tsender in pairs(heals[ttarget]) do
       if sender == tsender then
         heals[ttarget][tsender] = nil
+        HealsChanged(ttarget)
       end
     end
   end
@@ -573,6 +549,7 @@ function libpredict:HealDelay(sender, delay)
     for tsender, amount in pairs(heals[target]) do
       if sender == tsender then
         amount[2] = amount[2] + delay
+        HealsChanged(target, amount[2])
       end
     end
   end
@@ -588,7 +565,7 @@ function libpredict:UnitGetIncomingHeals(unit)
   if not heals[name] then
     return sumheal
   else
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     for sender, amount in pairs(heals[name]) do
       if amount[2] <= now then
         heals[name][sender] = nil
@@ -720,7 +697,7 @@ hooksecurefunc("CastSpell", function(id, bookType)
   
   if effect == REJUVENATION then
     local target = spell_queue[3]
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = "Reju" .. target
     
     -- Cooldown-Check
@@ -737,7 +714,7 @@ hooksecurefunc("CastSpell", function(id, bookType)
     libpredict.sender:SendHealCommMsg("Reju/"..target.."/"..rejuvDuration.."/"..rankStr.."/")
   elseif effect == RENEW then
     local target = spell_queue[3]
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = "Renew" .. target
     
     -- Cooldown-Check
@@ -783,7 +760,7 @@ hooksecurefunc("CastSpellByName", function(effect, target)
   
   if effect == REJUVENATION then
     local hotTarget = target or default
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = "Reju" .. hotTarget
     
     -- Cooldown-Check
@@ -800,7 +777,7 @@ hooksecurefunc("CastSpellByName", function(effect, target)
     libpredict.sender:SendHealCommMsg("Reju/"..hotTarget.."/"..rejuvDuration.."/"..rankStr.."/")
   elseif effect == RENEW then
     local hotTarget = target or default
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = "Renew" .. hotTarget
     
     -- Cooldown-Check
@@ -843,7 +820,7 @@ hooksecurefunc("UseAction", function(slot, target, selfcast)
   
   if effect == REJUVENATION then
     local hotTarget = spell_queue[3]
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = "Reju" .. hotTarget
     
     -- Cooldown-Check
@@ -860,7 +837,7 @@ hooksecurefunc("UseAction", function(slot, target, selfcast)
     libpredict.sender:SendHealCommMsg("Reju/"..hotTarget.."/"..rejuvDuration.."/"..rankStr.."/")
   elseif effect == RENEW then
     local hotTarget = spell_queue[3]
-    local now = pfUI.uf.now or GetTime()
+    local now = GetTime()
     local key = "Renew" .. hotTarget
     
     -- Cooldown-Check
@@ -1083,7 +1060,7 @@ function libpredict:GetHotDuration(unit, spell)
   
   -- FALLBACK: the HealComm/cast-fed table, for HoTs C_UnitAuras has no timer for
   local start, duration, timeleft
-  local now = pfUI.uf.now or GetTime()
+  local now = GetTime()
   
   local unitName = UnitName(unit)
   local unitdata = hots[unitName]

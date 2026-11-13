@@ -17,28 +17,28 @@ pfUI:RegisterModule("easteregg", function ()
     scene.stext = scene:CreateFontString(nil, "ARTWORK", "GameFontWhite")
     scene.stext:SetFont(STANDARD_TEXT_FONT, 14, "OUTLINE")
     scene.stext:SetPoint("TOP", 0, -380)
-    scene.stext:SetText("|cff33ffccShagu|cffffffff wishes you a")
+    scene.stext:SetText(T["|cff33ffccShagu|cffffffff wishes you a"])
 
     scene.text = scene:CreateFontString(nil, "ARTWORK", "GameFontWhite")
     scene.text:SetFont(pfUI.media["font:BigNoodleTitling.ttf"], 38)
     scene.text:SetPoint("TOP", 0, -400)
     scene.text:SetText(greeting)
 
-    local exit = "|cff444444<Click> or '/afk' to exit"
+    local exit = T["|cff444444<Click> or '/afk' to exit"]
     scene.dtext = scene:CreateFontString(nil, "ARTWORK", "GameFontWhite")
     scene.dtext:SetFont(STANDARD_TEXT_FONT, 14, "OUTLINE")
     scene.dtext:SetPoint("TOP", 0, -430)
     scene.dtext:SetText(info and info .. "\n\n" .. exit or exit)
 
-    -- Fade the night in by playing a fade-out backwards. The scene keeps an
-    -- alpha of 1, which comes back when the fade ends.
+    -- Fade the night in. The scene keeps an alpha of 1, which comes back
+    -- when the fade ends.
     scene.dusk = scene:CreateAnimationGroup()
     local fade = scene.dusk:CreateAnimation("Alpha")
-    fade:SetChange(-1)
+    fade:SetToAlpha(1)
     fade:SetDuration(.8)
 
     scene:SetScript("OnShow", function()
-      this.dusk:Play(true)
+      this.dusk:Play()
     end)
 
     -- start over on the next AFK
@@ -62,7 +62,7 @@ pfUI:RegisterModule("easteregg", function ()
 
   -- happy valentine's day
   if today == "0214" then
-    local valentine = CreateScene("pfValentine", "happy valentine's day!")
+    local valentine = CreateScene("pfValentine", T["happy valentine's day!"])
     valentine.text:SetTextColor(1, .4, .6)
 
     -- a rosy glow around the screen edges
@@ -155,11 +155,11 @@ pfUI:RegisterModule("easteregg", function ()
 
   -- happy hallow's end
   if today == "1031" then
-    local halloween = CreateScene("pfHallowsEnd", "happy hallow's end!")
+    local halloween = CreateScene("pfHallowsEnd", T["happy hallow's end!"])
     halloween.text:SetTextColor(1, .5, 0)
 
     -- Candlelight glows in from the screen edges. It flickers in uneven
-    -- steps of { duration, change } that end where they began, so the loop
+    -- steps of { duration, alpha } that end where they began, so the loop
     -- never jumps.
     local candle = CreateFrame("Frame", nil, halloween)
     candle:SetAllPoints()
@@ -169,16 +169,19 @@ pfUI:RegisterModule("easteregg", function ()
     candle.flicker = candle:CreateAnimationGroup()
     candle.flicker:SetLooping("REPEAT")
     local steps = {
-      { .18, -.25 }, { .09, .1 }, { .22, -.2 }, { .14, .3 }, { .3, -.1 },
-      { .11, -.15 }, { .2, .2 }, { .16, -.3 }, { .26, .25 }, { .12, .15 },
+      { .18, .75 }, { .09, .85 }, { .22, .65 }, { .14, .95 }, { .3, .85 },
+      { .11, .7 }, { .2, .9 }, { .16, .6 }, { .26, .85 }, { .12, 1 },
     }
+    local from = 1
     for order, step in ipairs(steps) do
-      local duration, change = unpack(step)
+      local duration, alpha = unpack(step)
       local fade = candle.flicker:CreateAnimation("Alpha")
       fade:SetOrder(order)
       fade:SetDuration(duration)
-      fade:SetChange(change)
+      fade:SetFromAlpha(from)
+      fade:SetToAlpha(alpha)
       fade:SetSmoothing("IN_OUT")
+      from = alpha
     end
 
     -- Once the night has fallen, undead rise along the bottom one after
@@ -271,11 +274,11 @@ pfUI:RegisterModule("easteregg", function ()
       end
     end)
 
-    _G.MARKED_AFK           = "You are now |cff33ffcc" .. title .. "|r (AFK)."
-    _G.MARKED_AFK_MESSAGE   = "You are now |cff33ffcc" .. title .. "|r (AFK): %s"
-    _G.CLEARED_AFK          = "You are no longer |cff33ffcc" .. title .. "|r (AFK).\n|cff33ffccShagu|cffffffff wishes you a merry christmas. Thanks for using |cff33ffccpf|cffffffffUI|cffffffff!|r"
+    _G.MARKED_AFK           = format(T["You are now |cff33ffcc%s|r (AFK)."], title)
+    _G.MARKED_AFK_MESSAGE   = format(T["You are now |cff33ffcc%s|r (AFK): %s"], title, "%s")
+    _G.CLEARED_AFK          = format(T["You are no longer |cff33ffcc%s|r (AFK).\n|cff33ffccShagu|cffffffff wishes you a merry christmas. Thanks for using |cff33ffccpf|cffffffffUI|cffffffff!|r"], title)
 
-    local snow = CreateScene("pfSnowfall", "merry christmas!")
+    local snow = CreateScene("pfSnowfall", T["merry christmas!"])
     snow.text:SetTextColor(1, .25, .25)
 
     -- Flakes fall past the screen for good and sway on the way down. Before
@@ -349,8 +352,8 @@ pfUI:RegisterModule("easteregg", function ()
 
   -- happy new year
   if today == "1231" or today == "0101" then
-    local fireworks = CreateScene("pfFireworks", "happy new year!",
-      "Another year with |cff33ffccpf|rUI has passed.\nThanks for continuing to use it!")
+    local fireworks = CreateScene("pfFireworks", T["happy new year!"],
+      T["Another year with |cff33ffccpf|rUI has passed.\nThanks for continuing to use it!"])
 
     -- Each explosion grows by 100px and fades out over 5/3s, then goes back
     -- to the pool.
